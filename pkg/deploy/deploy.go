@@ -87,7 +87,8 @@ func (d *Deployer) ensureRemoteDir() error {
 		sshArgs = append(sshArgs, "-i", d.keyFile)
 	}
 
-	sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", d.username, d.host), fmt.Sprintf("mkdir -p %s", d.remoteDir))
+	remoteCmd := fmt.Sprintf("test -f %s && rm -f %s; mkdir -p %s", d.remoteDir, d.remoteDir, d.remoteDir)
+	sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", d.username, d.host), remoteCmd)
 
 	fmt.Printf("Creating directory %s@%s:%s\n", d.username, d.host, d.remoteDir)
 
@@ -125,6 +126,8 @@ func (d *Deployer) parseDestination() error {
 	if d.remoteDir == "" {
 		d.remoteDir = fmt.Sprintf("~/%s", filepath.Base(d.source))
 	}
+
+	d.remoteDir = strings.TrimRight(d.remoteDir, "/\\")
 
 	return nil
 }

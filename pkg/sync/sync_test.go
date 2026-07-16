@@ -142,7 +142,7 @@ func TestRunTransfersFilesAndBuildsRelativeRemotePaths(t *testing.T) {
 		gotRemotes = append(gotRemotes, sent.remote)
 	}
 	sort.Strings(gotRemotes)
-	want := []string{"a.txt", filepath.Join("nested", "b.txt")}
+	want := []string{"backup/a.txt", filepath.Join("backup", "nested", "b.txt")}
 	sort.Strings(want)
 	if !reflect.DeepEqual(gotRemotes, want) {
 		t.Fatalf("remote paths = %v, want %v", gotRemotes, want)

@@ -13,12 +13,13 @@ import (
 )
 
 type Sync struct {
-	source      string
-	destination string
-	transport   transport.Transport
-	pool        *worker.WorkerPool
-	scanner     *scanner.Scanner
-	config      Config
+	source           string
+	destination      string
+	transport        transport.Transport
+	pool             *worker.WorkerPool
+	scanner          *scanner.Scanner
+	config           Config
+	createTargetDir  bool
 }
 
 type Config struct {
@@ -35,11 +36,21 @@ type Config struct {
 }
 
 func NewSync(source, destination string, transport transport.Transport, config Config) *Sync {
+	createTargetDir := true
+	destPath := destination
+	if idx := strings.LastIndex(destPath, ":"); idx != -1 {
+		destPath = destPath[idx+1:]
+	}
+	if strings.HasSuffix(destPath, "/") || strings.HasSuffix(destPath, "\\") {
+		createTargetDir = false
+	}
+
 	return &Sync{
-		source:      source,
-		destination: destination,
-		transport:   transport,
-		config:      config,
+		source:          source,
+		destination:     destination,
+		transport:       transport,
+		config:          config,
+		createTargetDir: createTargetDir,
 	}
 }
 
@@ -141,6 +152,8 @@ func (s *Sync) buildRemotePath(localPath string) string {
 		destPath = destPath[idx+1:]
 	}
 
+	destPath = strings.TrimRight(destPath, "/\\")
+
 	info, statErr := os.Stat(s.source)
 	if statErr == nil && !info.IsDir() {
 		return filepath.Base(destPath)
@@ -149,6 +162,10 @@ func (s *Sync) buildRemotePath(localPath string) string {
 	rel, err := filepath.Rel(s.source, localPath)
 	if err != nil {
 		rel = filepath.Base(localPath)
+	}
+
+	if s.createTargetDir {
+		return filepath.Join(filepath.Base(destPath), rel)
 	}
 
 	return rel
