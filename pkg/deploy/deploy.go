@@ -32,11 +32,40 @@ func (d *Deployer) Deploy() error {
 		return fmt.Errorf("parse destination failed: %w", err)
 	}
 
+	if err := d.ensureRemoteDir(); err != nil {
+		return fmt.Errorf("create remote directory failed: %w", err)
+	}
+
 	if err := d.copyBinary(); err != nil {
 		return fmt.Errorf("copy binary failed: %w", err)
 	}
 
 	return nil
+}
+
+func (d *Deployer) ensureRemoteDir() error {
+	sshArgs := []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "ConnectTimeout=10",
+	}
+
+	if d.port != 22 {
+		sshArgs = append(sshArgs, "-p", fmt.Sprintf("%d", d.port))
+	}
+
+	if d.keyFile != "" {
+		sshArgs = append(sshArgs, "-i", d.keyFile)
+	}
+
+	sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", d.username, d.host), fmt.Sprintf("mkdir -p %s", d.remoteDir))
+
+	fmt.Printf("Creating directory %s@%s:%s\n", d.username, d.host, d.remoteDir)
+
+	cmd := exec.Command("ssh", sshArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
 }
 
 func (d *Deployer) parseDestination() error {
