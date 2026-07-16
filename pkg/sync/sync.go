@@ -37,11 +37,7 @@ type Config struct {
 
 func NewSync(source, destination string, transport transport.Transport, config Config) *Sync {
 	createTargetDir := true
-	destPath := destination
-	if idx := strings.LastIndex(destPath, ":"); idx != -1 {
-		destPath = destPath[idx+1:]
-	}
-	if strings.HasSuffix(destPath, "/") || strings.HasSuffix(destPath, "\\") {
+	if strings.HasSuffix(source, "/") || strings.HasSuffix(source, "\\") {
 		createTargetDir = false
 	}
 
