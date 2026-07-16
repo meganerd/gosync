@@ -7,14 +7,14 @@ import (
 
 type Limiter struct {
 	limit     int64
-	bucket    int64
+	bucket    float64
 	lastCheck time.Time
 }
 
 func NewLimiter(bytesPerSecond int64) *Limiter {
 	return &Limiter{
 		limit:     bytesPerSecond,
-		bucket:    bytesPerSecond,
+		bucket:    float64(bytesPerSecond),
 		lastCheck: time.Now(),
 	}
 }
@@ -28,13 +28,13 @@ func (l *Limiter) Allow(n int) bool {
 	elapsed := now.Sub(l.lastCheck).Seconds()
 	l.lastCheck = now
 
-	l.bucket += int64(float64(l.limit) * elapsed)
-	if l.bucket > l.limit {
-		l.bucket = l.limit
+	l.bucket += float64(l.limit) * elapsed
+	if l.bucket > float64(l.limit) {
+		l.bucket = float64(l.limit)
 	}
 
-	if int64(n) <= l.bucket {
-		l.bucket -= int64(n)
+	if float64(n) <= l.bucket {
+		l.bucket -= float64(n)
 		return true
 	}
 

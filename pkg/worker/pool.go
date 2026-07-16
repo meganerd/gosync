@@ -16,6 +16,8 @@ type WorkerPool struct {
 	wg         sync.WaitGroup
 	ctx        context.Context
 	cancel     context.CancelFunc
+	closeJobsOnce    sync.Once
+	closeResultsOnce sync.Once
 	stats      Stats
 	statsMu    sync.RWMutex
 }
@@ -74,6 +76,12 @@ func (p *WorkerPool) worker(id int) {
 		select {
 		case <-p.ctx.Done():
 			return
+		default:
+		}
+
+		select {
+		case <-p.ctx.Done():
+			return
 		case job, ok := <-p.jobs:
 			if !ok {
 				return
@@ -129,8 +137,13 @@ func (p *WorkerPool) Results() <-chan TransferResult {
 
 func (p *WorkerPool) Close() {
 	p.cancel()
+	p.closeJobsOnce.Do(func() {
+		close(p.jobs)
+	})
 	p.wg.Wait()
-	close(p.results)
+	p.closeResultsOnce.Do(func() {
+		close(p.results)
+	})
 }
 
 func (p *WorkerPool) GetStats() Stats {
@@ -140,8 +153,16 @@ func (p *WorkerPool) GetStats() Stats {
 }
 
 func (p *WorkerPool) WaitForCompletion() {
-	p.Close()
+	p.closeJobsOnce.Do(func() {
+		close(p.jobs)
+	})
+	p.wg.Wait()
+	p.closeResultsOnce.Do(func() {
+		close(p.results)
+	})
+	p.statsMu.Lock()
 	p.stats.EndTime = time.Now()
+	p.statsMu.Unlock()
 }
 
 func (p *WorkerPool) Progress() float64 {

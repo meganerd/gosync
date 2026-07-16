@@ -48,7 +48,6 @@ func (p *Progress) Update(bytes int64, success bool) {
 	defer p.mu.Unlock()
 
 	p.transferredBytes += bytes
-	p.totalFiles++
 
 	if success {
 		p.completedFiles++
@@ -63,11 +62,18 @@ func (p *Progress) Update(bytes int64, success bool) {
 
 func (p *Progress) getInfo() ProgressInfo {
 	elapsed := time.Since(p.startTime)
-	speed := float64(p.transferredBytes) / elapsed.Seconds()
-	percent := float64(p.transferredBytes) / float64(p.totalBytes) * 100
+	var speed float64
+	if elapsed > 0 {
+		speed = float64(p.transferredBytes) / elapsed.Seconds()
+	}
+
+	var percent float64
+	if p.totalBytes > 0 {
+		percent = float64(p.transferredBytes) / float64(p.totalBytes) * 100
+	}
 
 	var eta time.Duration
-	if speed > 0 {
+	if speed > 0 && p.totalBytes > p.transferredBytes {
 		remaining := float64(p.totalBytes-p.transferredBytes) / speed
 		eta = time.Duration(remaining) * time.Second
 	}

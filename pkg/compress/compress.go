@@ -1,6 +1,7 @@
 package compress
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 )
@@ -14,9 +15,36 @@ func NewCompressor(level int) *Compressor {
 }
 
 func (c *Compressor) Compress(reader io.Reader) (io.Reader, error) {
-	return gzip.NewReader(reader)
+	var buf bytes.Buffer
+
+	writer, err := gzip.NewWriterLevel(&buf, c.level)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := io.Copy(writer, reader); err != nil {
+		writer.Close()
+		return nil, err
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+
+	return bytes.NewReader(buf.Bytes()), nil
 }
 
 func (c *Compressor) Decompress(reader io.Reader) (io.Reader, error) {
-	return gzip.NewReader(reader)
+	gz, err := gzip.NewReader(reader)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+
+	data, err := io.ReadAll(gz)
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes.NewReader(data), nil
 }
