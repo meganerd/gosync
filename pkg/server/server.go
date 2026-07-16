@@ -184,7 +184,7 @@ func (s *Server) handleReceive(conn net.Conn, remotePath string) {
 	}
 
 	checksum := hex.EncodeToString(hasher.Sum(nil))
-	fmt.Fprintf(conn, "\nCHECKSUM %s\n", checksum)
+	fmt.Fprintf(conn, "CHECKSUM %s\n", checksum)
 }
 
 func (s *Server) handleList(conn net.Conn) {

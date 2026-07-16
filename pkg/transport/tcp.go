@@ -81,7 +81,7 @@ func (t *TCPTransport) SendStream(reader io.Reader, remotePath string, size int6
 	}
 
 	checksum := hex.EncodeToString(hasher.Sum(nil))
-	_, err = t.conn.Write([]byte(fmt.Sprintf("\nCHECKSUM %s\n", checksum)))
+	_, err = t.conn.Write([]byte(fmt.Sprintf("CHECKSUM %s\n", checksum)))
 	if err != nil {
 		return fmt.Errorf("send checksum failed: %w", err)
 	}

@@ -104,7 +104,7 @@ func (q *QUICTransport) SendStream(reader io.Reader, remotePath string, size int
 	}
 
 	checksum := hex.EncodeToString(hasher.Sum(nil))
-	_, err = stream.Write([]byte(fmt.Sprintf("\nCHECKSUM %s\n", checksum)))
+	_, err = stream.Write([]byte(fmt.Sprintf("CHECKSUM %s\n", checksum)))
 	if err != nil {
 		return fmt.Errorf("send checksum failed: %w", err)
 	}
