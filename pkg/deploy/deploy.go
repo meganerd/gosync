@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 type Deployer struct {
@@ -16,6 +16,7 @@ type Deployer struct {
 	username    string
 	host        string
 	port        int
+	remoteDir   string
 }
 
 func NewDeployer(source, destination, keyFile string) *Deployer {
@@ -35,10 +36,6 @@ func (d *Deployer) Deploy() error {
 		return fmt.Errorf("copy binary failed: %w", err)
 	}
 
-	if err := d.startRemote(); err != nil {
-		return fmt.Errorf("start remote failed: %w", err)
-	}
-
 	return nil
 }
 
@@ -49,15 +46,25 @@ func (d *Deployer) parseDestination() error {
 		d.host = parts[1]
 	} else {
 		d.host = parts[0]
-		d.username = "root"
+		currentUser, err := user.Current()
+		if err != nil {
+			d.username = "root"
+		} else {
+			d.username = currentUser.Username
+		}
 	}
 
-	hostParts := strings.Split(d.host, ":")
-	if len(hostParts) == 2 {
+	hostParts := strings.SplitN(d.host, ":", 2)
+	if len(hostParts) == 2 && hostParts[1] != "" {
 		d.host = hostParts[0]
 		fmt.Sscanf(hostParts[1], "%d", &d.port)
 	} else {
+		d.host = hostParts[0]
 		d.port = 22
+	}
+
+	if d.remoteDir == "" {
+		d.remoteDir = fmt.Sprintf("~/%s", filepath.Base(d.source))
 	}
 
 	return nil
@@ -74,37 +81,32 @@ func (d *Deployer) copyBinary() error {
 		return fmt.Errorf("eval symlinks failed: %w", err)
 	}
 
-	remotePath := fmt.Sprintf("/usr/local/bin/gosync")
-	sshArgs := d.buildSSHArgs()
-	scpArgs := append(sshArgs, "-r", binaryPath, fmt.Sprintf("%s@%s:%s", d.username, d.host, remotePath))
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		return fmt.Errorf("binary not found: %s", binaryPath)
+	}
 
-	fmt.Printf("Copying binary to %s@%s:%s\n", d.username, d.host, remotePath)
+	scpArgs := []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "ConnectTimeout=10",
+	}
+
+	if d.port != 22 {
+		scpArgs = append(scpArgs, "-P", fmt.Sprintf("%d", d.port))
+	}
+
+	if d.keyFile != "" {
+		scpArgs = append(scpArgs, "-i", d.keyFile)
+	}
+
+	scpArgs = append(scpArgs, binaryPath, fmt.Sprintf("%s@%s:%s", d.username, d.host, d.remoteDir))
+
+	fmt.Printf("Copying binary to %s@%s:%s\n", d.username, d.host, d.remoteDir)
 
 	cmd := exec.Command("scp", scpArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	return cmd.Run()
-}
-
-func (d *Deployer) startRemote() error {
-	sshArgs := d.buildSSHArgs()
-	remoteCmd := "gosync serve --listen 0.0.0.0:8443 --base /tmp/gosync-receive &"
-	sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", d.username, d.host), remoteCmd)
-
-	fmt.Printf("Starting remote server on %s@%s\n", d.username, d.host)
-
-	cmd := exec.Command("ssh", sshArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("start remote server failed: %w", err)
-	}
-
-	time.Sleep(time.Second)
-	fmt.Printf("Remote server started on %s:8443\n", d.host)
-	return nil
 }
 
 func (d *Deployer) buildSSHArgs() []string {
@@ -134,7 +136,11 @@ func (d *Deployer) GetPort() int {
 
 func (d *Deployer) GetUsername() string {
 	if d.username == "" {
-		return "root"
+		currentUser, err := user.Current()
+		if err != nil {
+			return "root"
+		}
+		return currentUser.Username
 	}
 	return d.username
 }
