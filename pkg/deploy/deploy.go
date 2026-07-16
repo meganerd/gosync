@@ -40,7 +40,37 @@ func (d *Deployer) Deploy() error {
 		return fmt.Errorf("copy binary failed: %w", err)
 	}
 
+	if err := d.startRemoteServer(); err != nil {
+		return fmt.Errorf("start remote server failed: %w", err)
+	}
+
 	return nil
+}
+
+func (d *Deployer) startRemoteServer() error {
+	sshArgs := []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "ConnectTimeout=10",
+	}
+
+	if d.port != 22 {
+		sshArgs = append(sshArgs, "-p", fmt.Sprintf("%d", d.port))
+	}
+
+	if d.keyFile != "" {
+		sshArgs = append(sshArgs, "-i", d.keyFile)
+	}
+
+	remoteCmd := fmt.Sprintf("cd %s && nohup ./gosync serve --listen 0.0.0.0:8443 --base %s > /tmp/gosync-server.log 2>&1 &", d.remoteDir, d.remoteDir)
+	sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", d.username, d.host), remoteCmd)
+
+	fmt.Printf("Starting remote server on %s@%s\n", d.username, d.host)
+
+	cmd := exec.Command("ssh", sshArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
 }
 
 func (d *Deployer) ensureRemoteDir() error {
