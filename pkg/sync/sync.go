@@ -168,24 +168,26 @@ func (s *Sync) buildRemotePath(localPath string) string {
 }
 
 func extractHost(dest string) string {
-	for i, c := range dest {
-		if c == ':' {
-			return dest[:i]
-		}
+	if idx := strings.Index(dest, "@"); idx != -1 {
+		dest = dest[idx+1:]
+	}
+	if idx := strings.Index(dest, ":"); idx != -1 {
+		return dest[:idx]
 	}
 	return dest
 }
 
 func extractPort(dest string) int {
-	for i, c := range dest {
-		if c == ':' {
-			var port int
-			fmt.Sscanf(dest[i+1:], "%d", &port)
-			if port > 0 {
-				return port
-			}
-			return 22
+	if idx := strings.Index(dest, "@"); idx != -1 {
+		dest = dest[idx+1:]
+	}
+	if idx := strings.Index(dest, ":"); idx != -1 {
+		var port int
+		fmt.Sscanf(dest[idx+1:], "%d", &port)
+		if port > 0 {
+			return port
 		}
+		return 22
 	}
 	return 22
 }
