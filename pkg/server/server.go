@@ -66,9 +66,18 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	fmt.Printf("Client connected: %s\n", remoteAddr)
 
-	scanner := bufio.NewScanner(conn)
-	for scanner.Scan() {
-		line := scanner.Text()
+	reader := bufio.NewReader(conn)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
 		parts := strings.SplitN(line, " ", 3)
 		if len(parts) == 0 {
 			continue
@@ -84,7 +93,7 @@ func (s *Server) handleClient(conn net.Conn) {
 			path := parts[1]
 			var size int64
 			fmt.Sscanf(parts[2], "%d", &size)
-			s.handleSend(conn, path, size)
+			s.handleSend(reader, conn, path, size)
 
 		case "RECEIVE":
 			if len(parts) < 2 {
@@ -110,7 +119,7 @@ func (s *Server) handleClient(conn net.Conn) {
 	}
 }
 
-func (s *Server) handleSend(conn net.Conn, remotePath string, size int64) {
+func (s *Server) handleSend(reader io.Reader, conn net.Conn, remotePath string, size int64) {
 	fullPath := filepath.Join(s.baseDir, remotePath)
 
 	dir := filepath.Dir(fullPath)
@@ -136,7 +145,7 @@ func (s *Server) handleSend(conn net.Conn, remotePath string, size int64) {
 		if toRead > remaining {
 			toRead = remaining
 		}
-		n, err := io.ReadAtLeast(conn, buf[:toRead], int(toRead))
+		n, err := io.ReadAtLeast(reader, buf[:toRead], int(toRead))
 		if n > 0 {
 			_, writeErr := writer.Write(buf[:n])
 			if writeErr != nil {
@@ -154,7 +163,7 @@ func (s *Server) handleSend(conn net.Conn, remotePath string, size int64) {
 	}
 
 	checksum := hex.EncodeToString(hasher.Sum(nil))
-	s.sendResponse(conn, fmt.Sprintf("OK %s %d", checksum, size))
+	s.sendResponse(conn, fmt.Sprintf("%s %d", checksum, size))
 }
 
 func (s *Server) handleReceive(conn net.Conn, remotePath string) {

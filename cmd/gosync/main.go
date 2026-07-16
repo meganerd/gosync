@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gbjohnso/gosync/pkg/deploy"
@@ -37,7 +38,7 @@ func main() {
 		showVersion   = flag.Bool("version", false, "Show version info")
 		deployFlag    = flag.Bool("deploy", false, "Deploy gosync to remote host via SSH")
 		deployKey     = flag.String("deploy-key", "", "SSH key file for deployment")
-		deployListen  = flag.String("deploy-listen", "0.0.0.0:8443", "Listen address for remote server")
+		deployListen  = flag.String("deploy-listen", "0.0.0.0:0", "Listen address for remote server (port 0 = auto-select)")
 		excludes      = flag.String("exclude", "", "Exclude patterns (comma-separated)")
 		includes      = flag.String("include", "", "Include patterns (comma-separated)")
 	)
@@ -139,17 +140,26 @@ func main() {
 
 func runDeploy(source, destination, keyFile, listenAddr, transportType string, workers int, bandwidth int64, compression, dryRun, verbose, quiet, resume, checksum bool) {
 	d := deploy.NewDeployer(source, destination, keyFile)
+
+	if idx := strings.LastIndex(listenAddr, ":"); idx != -1 {
+		if p, err := strconv.Atoi(listenAddr[idx+1:]); err == nil && p > 0 && p < 65536 {
+			d.SetServerPort(p)
+		}
+	}
+
 	if err := d.Deploy(); err != nil {
 		fmt.Fprintf(os.Stderr, "Deploy failed: %v\n", err)
 		os.Exit(1)
 	}
 
+	serverPort := d.GetServerPort()
+
 	fmt.Printf("Deployed gosync to %s\n", d.GetHost())
-	fmt.Printf("Remote server listening on %s:8443\n", d.GetHost())
+	fmt.Printf("Remote server listening on %s:%d\n", d.GetHost(), serverPort)
 
 	config := transport.Config{
 		Host:        d.GetHost(),
-		Port:        8443,
+		Port:        serverPort,
 		Username:    d.GetUsername(),
 		Timeout:     30,
 		MaxRetries:  3,
@@ -173,17 +183,21 @@ func runDeploy(source, destination, keyFile, listenAddr, transportType string, w
 		Includes:    includeList,
 	}
 
-	deployDest := fmt.Sprintf("%s@%s:8443", d.GetUsername(), d.GetHost())
+	deployDest := fmt.Sprintf("%s@%s:%d", d.GetUsername(), d.GetHost(), serverPort)
 	s := sync.NewSync(source, deployDest, transportImpl, syncConfig)
+	s.SetRemoteBase(d.GetBaseDir())
 	if err := s.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Sync failed: %v\n", err)
+		d.Cleanup()
 		os.Exit(1)
 	}
+
+	d.Cleanup()
 }
 
 func runServe() {
 	serveCmd := flag.NewFlagSet("serve", flag.ExitOnError)
-	listenAddr := serveCmd.String("listen", "0.0.0.0:8443", "Listen address")
+	listenAddr := serveCmd.String("listen", "0.0.0.0:9444", "Listen address")
 	baseDir := serveCmd.String("base", "/tmp/gosync-receive", "Base directory for received files")
 
 	serveCmd.Usage = func() {

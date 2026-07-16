@@ -13,13 +13,14 @@ import (
 )
 
 type Sync struct {
-	source           string
-	destination      string
-	transport        transport.Transport
-	pool             *worker.WorkerPool
-	scanner          *scanner.Scanner
-	config           Config
-	createTargetDir  bool
+	source          string
+	destination     string
+	transport       transport.Transport
+	pool            *worker.WorkerPool
+	scanner         *scanner.Scanner
+	config          Config
+	createTargetDir bool
+	remoteBase      string
 }
 
 type Config struct {
@@ -48,6 +49,10 @@ func NewSync(source, destination string, transport transport.Transport, config C
 		config:          config,
 		createTargetDir: createTargetDir,
 	}
+}
+
+func (s *Sync) SetRemoteBase(base string) {
+	s.remoteBase = base
 }
 
 func (s *Sync) Run() error {
@@ -143,16 +148,19 @@ func (s *Sync) processResults() {
 }
 
 func (s *Sync) buildRemotePath(localPath string) string {
-	destPath := s.destination
-	if idx := strings.LastIndex(destPath, ":"); idx != -1 {
-		destPath = destPath[idx+1:]
+	remoteBase := s.remoteBase
+	if remoteBase == "" {
+		remoteBase = s.destination
+		if idx := strings.LastIndex(remoteBase, ":"); idx != -1 {
+			remoteBase = remoteBase[idx+1:]
+		}
 	}
 
-	destPath = strings.TrimRight(destPath, "/\\")
+	remoteBase = strings.TrimRight(remoteBase, "/\\")
 
 	info, statErr := os.Stat(s.source)
 	if statErr == nil && !info.IsDir() {
-		return filepath.Base(destPath)
+		return filepath.Base(remoteBase)
 	}
 
 	rel, err := filepath.Rel(s.source, localPath)
@@ -161,7 +169,7 @@ func (s *Sync) buildRemotePath(localPath string) string {
 	}
 
 	if s.createTargetDir {
-		return filepath.Join(filepath.Base(destPath), rel)
+		return filepath.Join(filepath.Base(s.source), rel)
 	}
 
 	return rel
