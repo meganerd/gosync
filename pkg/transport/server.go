@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,7 @@ type ServerTransport struct {
 	config Config
 	conn   net.Conn
 	reader *bufio.Reader
+	mu     sync.Mutex
 }
 
 func NewServerTransport(config Config) *ServerTransport {
@@ -40,10 +42,19 @@ func (t *ServerTransport) Connect(host string, port int) error {
 		return fmt.Errorf("ping failed: %w", err)
 	}
 
+	pong, err := t.readResponse()
+	if err != nil || !strings.HasPrefix(pong, "OK PONG") {
+		conn.Close()
+		return fmt.Errorf("ping failed: no PONG from server")
+	}
+
 	return nil
 }
 
 func (t *ServerTransport) SendFile(localPath, remotePath string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	file, err := os.Open(localPath)
 	if err != nil {
 		return fmt.Errorf("open file failed: %w", err)
