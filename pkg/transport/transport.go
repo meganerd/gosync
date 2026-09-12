@@ -43,12 +43,12 @@ type FileInfo struct {
 
 // TransferResult represents the result of a file transfer.
 type TransferResult struct {
-	Path      string
-	Size      int64
-	Duration  float64
-	Speed     float64 // bytes per second
-	Checksum  string
-	Error     error
+	Path     string
+	Size     int64
+	Duration float64
+	Speed    float64 // bytes per second
+	Checksum string
+	Error    error
 }
 
 // Config holds transport configuration.
@@ -60,5 +60,17 @@ type Config struct {
 	Timeout     int
 	MaxRetries  int
 	Compression bool
+	Checksum    bool  // verify SHA-256 with legacy commands; false negotiates NOHASH
 	Bandwidth   int64 // bytes per second, 0 = unlimited
+	BufferSize  int   // bytes per copy buffer for TCP/server/QUIC, 0 = default (32 KiB)
+	// Connections is the number of QUIC data connections (sender sockets) used
+	// per file, 1..ranged.MaxConnections; 0 and 1 both mean a single connection
+	// and reproduce the single-connection wire behavior exactly. Values above 1
+	// apply only to QUIC and only to files at or above ranged.MinFanoutSize.
+	Connections int
+	// CertificatePEM pins the first certificate's exact leaf DER for QUIC.
+	// Optional trailing chain certificates are accepted; private keys are not.
+	// Empty means system PKI and hostname validation. Pinning replaces hostname
+	// validation but still requires current validity and server-auth usage.
+	CertificatePEM []byte
 }

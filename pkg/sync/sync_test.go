@@ -12,13 +12,13 @@ import (
 )
 
 type fakeTransport struct {
-	mu         sync.Mutex
-	connected  bool
+	mu          sync.Mutex
+	connected   bool
 	connectHost string
 	connectPort int
-	sent       []struct{ local, remote string }
-	connectErr error
-	sendErr    map[string]error
+	sent        []struct{ local, remote string }
+	connectErr  error
+	sendErr     map[string]error
 }
 
 func (f *fakeTransport) Name() string { return "fake" }
@@ -36,9 +36,9 @@ func (f *fakeTransport) SendFile(localPath, remotePath string) error {
 	f.sent = append(f.sent, struct{ local, remote string }{localPath, remotePath})
 	return f.sendErr[localPath]
 }
-func (f *fakeTransport) ReceiveFile(string, string) error { return nil }
+func (f *fakeTransport) ReceiveFile(string, string) error          { return nil }
 func (f *fakeTransport) SendStream(io.Reader, string, int64) error { return nil }
-func (f *fakeTransport) ReceiveStream(string, io.Writer) error { return nil }
+func (f *fakeTransport) ReceiveStream(string, io.Writer) error     { return nil }
 func (f *fakeTransport) Close() error {
 	f.mu.Lock()
 	f.connected = false
@@ -83,6 +83,27 @@ func TestBuildRemotePathAndHelpers(t *testing.T) {
 	}
 	if got := extractPort("server:/dst"); got != 22 {
 		t.Fatalf("extractPort(default) = %d", got)
+	}
+}
+
+func TestDeployedSingleFilePreservesFilename(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "Win10_22H2_English_x64v1.iso")
+	if err := os.WriteFile(source, []byte("test ISO payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, base := range []string{"~", "test123", "/remote/backup", "/remote/backup with spaces/", "/"} {
+		t.Run(base, func(t *testing.T) {
+			tr := &fakeTransport{}
+			s := NewSync(source, "alice@host:54321", tr, Config{Workers: 1, Quiet: true})
+			s.SetRemoteBase(base)
+			if err := s.Run(); err != nil {
+				t.Fatal(err)
+			}
+			if len(tr.sent) != 1 || tr.sent[0].remote != filepath.Base(source) {
+				t.Fatalf("base %q: transfers = %+v, want filename %q", base, tr.sent, filepath.Base(source))
+			}
+		})
 	}
 }
 

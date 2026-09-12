@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gbjohnso/gosync/pkg/progress"
 	"github.com/gbjohnso/gosync/pkg/scanner"
 	"github.com/gbjohnso/gosync/pkg/transport"
 	"github.com/gbjohnso/gosync/pkg/worker"
@@ -25,11 +26,13 @@ type Sync struct {
 
 type Config struct {
 	Workers     int
+	Connections int // QUIC data connections (sender sockets) per file; 0 leaves the transport's own setting
 	Bandwidth   int64
 	Compression bool
 	DryRun      bool
 	Verbose     bool
 	Quiet       bool
+	Progress    bool
 	Resume      bool
 	Checksum    bool
 	Excludes    []string
@@ -86,16 +89,50 @@ func (s *Sync) Run() error {
 	}
 
 	if !s.config.DryRun {
+		if configurable, ok := s.transport.(transport.ChecksumConfigurer); ok {
+			configurable.SetChecksum(s.config.Checksum)
+		}
+		// Fan-out is negotiated during the handshake, so configure it first.
+		if s.config.Connections > 0 {
+			if configurable, ok := s.transport.(transport.ConnectionsConfigurer); ok {
+				if err := configurable.SetConnections(s.config.Connections); err != nil {
+					return fmt.Errorf("invalid connections: %w", err)
+				}
+			}
+		}
 		if err := s.transport.Connect(extractHost(s.destination), extractPort(s.destination)); err != nil {
 			return fmt.Errorf("connect failed: %w", err)
 		}
 		defer s.transport.Close()
 	}
 
+	sourcePath, destinationPath := s.progressPaths()
+	var display *transferProgress
+	if s.config.Progress && !s.config.Quiet && !s.config.DryRun {
+		display = &transferProgress{
+			tracker:     progress.NewProgress(s.scanner.TotalSize(), len(files)),
+			writer:      os.Stderr,
+			source:      sourcePath,
+			destination: destinationPath,
+		}
+		if info, err := os.Stderr.Stat(); err == nil {
+			display.terminal = info.Mode()&os.ModeCharDevice != 0
+		}
+		if reporter, ok := s.transport.(transport.ProgressReporter); ok {
+			display.streaming = true
+			reporter.SetProgressCallback(display.tracker.AddBytes)
+			defer reporter.SetProgressCallback(nil)
+		}
+	}
+
 	s.pool = worker.NewWorkerPool(workers, s.transport)
 	s.pool.Start()
 
-	go s.processResults()
+	resultsDone := make(chan struct{})
+	go func() {
+		defer close(resultsDone)
+		s.processResults(display)
+	}()
 
 	for _, file := range files {
 		remotePath := s.buildRemotePath(file.Path)
@@ -117,32 +154,70 @@ func (s *Sync) Run() error {
 	}
 
 	s.pool.WaitForCompletion()
+	<-resultsDone
 
 	stats := s.pool.GetStats()
 	elapsed := time.Since(start)
 
 	if !s.config.Quiet {
 		fmt.Printf("\nTransfer complete:\n")
+		fmt.Printf("  Source: %s\n  Destination: %s\n", sourcePath, destinationPath)
 		fmt.Printf("  Files: %d transferred, %d failed\n", stats.CompletedFiles, stats.FailedFiles)
 		fmt.Printf("  Size:  %s\n", formatSize(stats.TransferredBytes))
 		fmt.Printf("  Time:  %s\n", elapsed.Round(time.Millisecond))
 		fmt.Printf("  Speed: %s/s\n", formatSize(int64(float64(stats.TransferredBytes)/elapsed.Seconds())))
 	}
 
+	if stats.FailedFiles > 0 {
+		return fmt.Errorf("%d file transfers failed", stats.FailedFiles)
+	}
 	return nil
 }
 
-func (s *Sync) processResults() {
-	for result := range s.pool.Results() {
-		if result.Error != nil {
-			if !s.config.Quiet {
-				fmt.Printf("ERROR: %s: %v\n", result.Job.LocalPath, result.Error)
+func (s *Sync) processResults(display *transferProgress) {
+	var ticks <-chan time.Time
+	if display != nil {
+		interval := time.Second
+		if display.terminal {
+			interval = 200 * time.Millisecond
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		ticks = ticker.C
+		display.render(false)
+	}
+	for {
+		select {
+		case <-ticks:
+			display.render(false)
+		case result, ok := <-s.pool.Results():
+			if !ok {
+				if display != nil {
+					display.render(true)
+				}
+				return
 			}
-		} else if s.config.Verbose {
-			fmt.Printf("OK: %s (%s in %s)\n",
-				result.Job.LocalPath,
-				formatSize(result.Job.Size),
-				result.Duration.Round(time.Millisecond))
+			if display != nil {
+				var bytes int64
+				// Custom transports without live reporting fall back to completed files.
+				if !display.streaming && result.Error == nil {
+					bytes = result.Job.Size
+				}
+				display.tracker.Update(bytes, result.Error == nil)
+				if !s.config.Quiet && (result.Error != nil || s.config.Verbose) {
+					display.clear()
+				}
+			}
+			if result.Error != nil {
+				if !s.config.Quiet {
+					fmt.Printf("ERROR: %s: %v\n", result.Job.LocalPath, result.Error)
+				}
+			} else if s.config.Verbose && !s.config.Quiet {
+				fmt.Printf("OK: %s (%s in %s)\n",
+					result.Job.LocalPath,
+					formatSize(result.Job.Size),
+					result.Duration.Round(time.Millisecond))
+			}
 		}
 	}
 }
@@ -160,6 +235,10 @@ func (s *Sync) buildRemotePath(localPath string) string {
 
 	info, statErr := os.Stat(s.source)
 	if statErr == nil && !info.IsDir() {
+		// Deployment configures a receiver directory, not a destination filename.
+		if s.remoteBase != "" {
+			return filepath.Base(localPath)
+		}
 		return filepath.Base(remoteBase)
 	}
 

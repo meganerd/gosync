@@ -12,14 +12,20 @@ import (
 )
 
 type SSHTransport struct {
-	config    Config
-	client    *ssh.Client
-	session   *ssh.Session
-	connected bool
+	progressCallback func(int64)
+	config           Config
+	client           *ssh.Client
+	session          *ssh.Session
+	connected        bool
 }
 
 func NewSSHTransport(config Config) *SSHTransport {
 	return &SSHTransport{config: config}
+}
+
+// SetProgressCallback implements ProgressReporter.
+func (s *SSHTransport) SetProgressCallback(callback func(int64)) {
+	s.progressCallback = callback
 }
 
 func (s *SSHTransport) Name() string {
@@ -106,7 +112,7 @@ func (s *SSHTransport) SendStream(reader io.Reader, remotePath string, size int6
 	}
 
 	hasher := sha256.New()
-	writer := io.MultiWriter(stdin, hasher)
+	writer := io.MultiWriter(progressWriter{stdin, s.progressCallback}, hasher)
 
 	_, err = io.Copy(writer, reader)
 	if err != nil {

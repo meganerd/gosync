@@ -1,5 +1,6 @@
 # Binaries
 /gosync
+/gosync-fixed
 *.exe
 *.exe~
 *.dll
@@ -27,3 +28,6 @@ Thumbs.db
 
 # Build output
 dist/
+
+# Local benchmark logs, profiles, and matching binaries
+/benchmark-results/

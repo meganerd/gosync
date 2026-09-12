@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -12,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gbjohnso/gosync/pkg/server"
 )
 
 var (
@@ -39,8 +43,15 @@ func TestTCPTransportSendStreamAndClose(t *testing.T) {
 		defer conn.Close()
 
 		reader := bufio.NewReader(conn)
+		ping, _ := reader.ReadString('\n')
+		if ping != "PING BASE\n" {
+			t.Errorf("ping = %q", ping)
+			return
+		}
+		conn.Write([]byte("OK PONG\n"))
+
 		header, _ := reader.ReadString('\n')
-		if header != "SEND remote/file.txt 14\n" {
+		if header != "SEND 14 "+base64.StdEncoding.EncodeToString([]byte("remote/file.txt"))+"\n" {
 			t.Errorf("header = %q", header)
 			return
 		}
@@ -54,15 +65,17 @@ func TestTCPTransportSendStreamAndClose(t *testing.T) {
 			t.Errorf("body = %q, want %q", body, payload)
 		}
 
-		checksumLine, _ := reader.ReadString('\n')
 		sum := sha256.Sum256(payload)
 		wantChecksum := hex.EncodeToString(sum[:])
-		if strings.TrimSpace(checksumLine) != "CHECKSUM "+wantChecksum {
-			t.Errorf("checksum line = %q, want %q", strings.TrimSpace(checksumLine), "CHECKSUM "+wantChecksum)
+		conn.Write([]byte(fmt.Sprintf("OK %s 14\n", wantChecksum)))
+
+		quit, _ := reader.ReadString('\n')
+		if quit != "QUIT\n" {
+			t.Errorf("quit = %q", quit)
 		}
 	}()
 
-	transport := NewTCPTransport(Config{Timeout: 1})
+	transport := NewTCPTransport(Config{Checksum: true, Timeout: 1})
 	addr := ln.Addr().(*net.TCPAddr)
 	if err := transport.Connect("127.0.0.1", addr.Port); err != nil {
 		t.Fatalf("Connect() error = %v", err)
@@ -98,15 +111,25 @@ func TestTCPTransportReceiveStreamAndFileOperations(t *testing.T) {
 		}
 		defer conn.Close()
 		reader := bufio.NewReader(conn)
+		ping, _ := reader.ReadString('\n')
+		if ping != "PING BASE\n" {
+			t.Errorf("ping = %q", ping)
+			return
+		}
+		conn.Write([]byte("OK PONG\n"))
+
 		header, _ := reader.ReadString('\n')
-		if header != "RECEIVE src/file.txt\n" {
+		if header != "RECEIVE "+base64.StdEncoding.EncodeToString([]byte("src/file.txt"))+"\n" {
 			t.Errorf("header = %q", header)
 			return
 		}
+		conn.Write([]byte(fmt.Sprintf("OK SIZE %d\n", len(payload))))
 		conn.Write(payload)
+		sum := sha256.Sum256(payload)
+		conn.Write([]byte(fmt.Sprintf("CHECKSUM %s\n", hex.EncodeToString(sum[:]))))
 	}()
 
-	transport := NewTCPTransport(Config{Timeout: 1})
+	transport := NewTCPTransport(Config{Checksum: true, Timeout: 1})
 	addr := ln.Addr().(*net.TCPAddr)
 	if err := transport.Connect("127.0.0.1", addr.Port); err != nil {
 		t.Fatalf("Connect() error = %v", err)
@@ -151,4 +174,58 @@ func TestTCPTransportBuildRemotePathFallback(t *testing.T) {
 	}
 
 	time.Sleep(1 * time.Millisecond)
+}
+
+func TestTCPTransportRoundTripWithSpaces(t *testing.T) {
+	baseDir := t.TempDir()
+	server := server.NewServer("127.0.0.1:0", baseDir)
+	go func() {
+		_ = server.Start()
+	}()
+
+	// Wait for the listener to bind before connecting.
+	var addr *net.TCPAddr
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if a := server.Addr(); a != nil {
+			addr = a.(*net.TCPAddr)
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if addr == nil {
+		t.Fatal("server never bound a listener")
+	}
+
+	transport := NewTCPTransport(Config{Checksum: true, Timeout: 5})
+	if err := transport.Connect("127.0.0.1", addr.Port); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+
+	remotePath := "My Movies/Allan Quatermain and the Lost City of Gold 2025 1080p.mkv"
+	payload := []byte("payload with spaces in path")
+	if err := transport.SendStream(bytes.NewReader(payload), remotePath, int64(len(payload))); err != nil {
+		t.Fatalf("SendStream() error = %v", err)
+	}
+
+	stored, err := os.ReadFile(filepath.Join(baseDir, filepath.FromSlash(remotePath)))
+	if err != nil {
+		t.Fatalf("file with spaces not stored intact: %v", err)
+	}
+	if !bytes.Equal(stored, payload) {
+		t.Fatalf("stored = %q, want %q", stored, payload)
+	}
+
+	var buf bytes.Buffer
+	if err := transport.ReceiveStream(remotePath, &buf); err != nil {
+		t.Fatalf("ReceiveStream() error = %v", err)
+	}
+	if !bytes.Equal(buf.Bytes(), payload) {
+		t.Fatalf("received = %q, want %q", buf.Bytes(), payload)
+	}
+
+	if err := transport.Close(); err != nil {
+		t.Fatal(err)
+	}
+	server.Stop()
 }

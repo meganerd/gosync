@@ -2,8 +2,7 @@ package transport
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -12,13 +11,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gbjohnso/gosync/pkg/checksum"
 )
 
 type ServerTransport struct {
-	config Config
-	conn   net.Conn
-	reader *bufio.Reader
-	mu     sync.Mutex
+	progressCallback func(int64)
+	config           Config
+	conn             net.Conn
+	reader           *bufio.Reader
+	remoteBase       string
+	mu               sync.Mutex
 }
 
 func NewServerTransport(config Config) *ServerTransport {
@@ -27,8 +30,29 @@ func NewServerTransport(config Config) *ServerTransport {
 	}
 }
 
+// SetProgressCallback implements ProgressReporter.
+func (t *ServerTransport) SetProgressCallback(callback func(int64)) {
+	t.progressCallback = callback
+}
+
+func (t *ServerTransport) SetChecksum(enabled bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.config.Checksum = enabled
+}
+
+func (t *ServerTransport) Name() string {
+	return "server"
+}
+
 func (t *ServerTransport) Connect(host string, port int) error {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	if t.config.BufferSize != 0 {
+		if err := checksum.ValidateBufferSize(t.config.BufferSize); err != nil {
+			return fmt.Errorf("invalid buffer size: %w", err)
+		}
+	}
+	t.remoteBase = ""
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, time.Duration(t.config.Timeout)*time.Second)
 	if err != nil {
 		return fmt.Errorf("connect to server failed: %w", err)
@@ -36,8 +60,23 @@ func (t *ServerTransport) Connect(host string, port int) error {
 
 	t.conn = conn
 	t.reader = bufio.NewReader(conn)
+	connected := false
+	defer func() {
+		if !connected {
+			_ = conn.Close()
+			t.conn, t.reader, t.remoteBase = nil, nil, ""
+		}
+	}()
+	timeout := time.Duration(t.config.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	defer conn.SetDeadline(time.Time{})
 
-	if err := t.sendCommand("PING"); err != nil {
+	if err := t.sendCommand("PING BASE"); err != nil {
 		conn.Close()
 		return fmt.Errorf("ping failed: %w", err)
 	}
@@ -48,6 +87,13 @@ func (t *ServerTransport) Connect(host string, port int) error {
 		return fmt.Errorf("ping failed: no PONG from server")
 	}
 
+	if !t.config.Checksum {
+		if err := requireNoHashCaps(conn, t.reader); err != nil {
+			return err
+		}
+	}
+	t.remoteBase = parseRemoteBase(pong)
+	connected = true
 	return nil
 }
 
@@ -66,31 +112,32 @@ func (t *ServerTransport) SendFile(localPath, remotePath string) error {
 		return fmt.Errorf("stat file failed: %w", err)
 	}
 
-	size := stat.Size()
+	return t.sendStreamLocked(file, remotePath, stat.Size())
+}
 
-	if err := t.sendCommand(fmt.Sprintf("SEND %s %d", remotePath, size)); err != nil {
+func (t *ServerTransport) SendStream(reader io.Reader, remotePath string, size int64) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sendStreamLocked(reader, remotePath, size)
+}
+
+// sendStreamLocked must be called with t.mu held so that the command line,
+// the payload, and the response read are one atomic unit on the wire.
+func (t *ServerTransport) sendStreamLocked(reader io.Reader, remotePath string, size int64) error {
+	if t.conn == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	if size < 0 {
+		return fmt.Errorf("invalid send size: %d", size)
+	}
+	if err := t.sendCommand(fmt.Sprintf("%s %d %s", transferCommand("SEND", t.config.Checksum), size, base64.StdEncoding.EncodeToString([]byte(remotePath)))); err != nil {
 		return fmt.Errorf("send command failed: %w", err)
 	}
 
-	hasher := sha256.New()
-	writer := io.MultiWriter(t.conn, hasher)
-
-	remaining := size
-	buf := make([]byte, 32*1024)
-	for remaining > 0 {
-		n, err := file.Read(buf)
-		if n > 0 {
-			if _, writeErr := writer.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("write failed: %w", writeErr)
-			}
-			remaining -= int64(n)
-		}
-		if err != nil {
-			if err != io.EOF {
-				return fmt.Errorf("read failed: %w", err)
-			}
-			break
-		}
+	digest, err := copyPayload(progressWriter{t.conn, t.progressCallback}, reader, size, t.config)
+	if err != nil {
+		return fmt.Errorf("transfer failed: %w", err)
 	}
 
 	response, err := t.readResponse()
@@ -98,135 +145,28 @@ func (t *ServerTransport) SendFile(localPath, remotePath string) error {
 		return fmt.Errorf("read response failed: %w", err)
 	}
 
-	if !strings.HasPrefix(response, "OK") {
-		return fmt.Errorf("server error: %s", response)
-	}
-
-	parts := strings.Fields(response)
-	if len(parts) >= 3 {
-		expectedChecksum := parts[1]
-		actualChecksum := hex.EncodeToString(hasher.Sum(nil))
-		if expectedChecksum != actualChecksum {
-			return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
-		}
-	}
-
-	return nil
+	return validateSendReply(response, size, digest, t.config.Checksum)
 }
 
 func (t *ServerTransport) ReceiveFile(remotePath, localPath string) error {
-	if err := t.sendCommand(fmt.Sprintf("RECEIVE %s", remotePath)); err != nil {
-		return fmt.Errorf("send command failed: %w", err)
-	}
-
-	response, err := t.readResponse()
-	if err != nil {
-		return fmt.Errorf("read response failed: %w", err)
-	}
-
-	if !strings.HasPrefix(response, "OK SIZE") {
-		return fmt.Errorf("server error: %s", response)
-	}
-
-	sizeStr := strings.TrimPrefix(response, "OK SIZE ")
-	size, err := strconv.ParseInt(sizeStr, 10, 64)
-	if err != nil {
-		return fmt.Errorf("parse size failed: %w", err)
-	}
-
 	file, err := os.Create(localPath)
 	if err != nil {
 		return fmt.Errorf("create file failed: %w", err)
 	}
 	defer file.Close()
 
-	hasher := sha256.New()
-	writer := io.MultiWriter(file, hasher)
-
-	remaining := size
-	buf := make([]byte, 32*1024)
-	for remaining > 0 {
-		n, err := t.conn.Read(buf)
-		if n > 0 {
-			if _, writeErr := writer.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("write failed: %w", writeErr)
-			}
-			remaining -= int64(n)
-		}
-		if err != nil {
-			if err != io.EOF {
-				return fmt.Errorf("read failed: %w", err)
-			}
-			break
-		}
-	}
-
-	checksumLine, err := t.reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("read checksum failed: %w", err)
-	}
-
-	checksumLine = strings.TrimSpace(checksumLine)
-	if strings.HasPrefix(checksumLine, "CHECKSUM ") {
-		expectedChecksum := strings.TrimPrefix(checksumLine, "CHECKSUM ")
-		actualChecksum := hex.EncodeToString(hasher.Sum(nil))
-		if expectedChecksum != actualChecksum {
-			return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
-		}
-	}
-
-	return nil
-}
-
-func (t *ServerTransport) SendStream(reader io.Reader, remotePath string, size int64) error {
-	if err := t.sendCommand(fmt.Sprintf("SEND %s %d", remotePath, size)); err != nil {
-		return fmt.Errorf("send command failed: %w", err)
-	}
-
-	hasher := sha256.New()
-	writer := io.MultiWriter(t.conn, hasher)
-
-	remaining := size
-	buf := make([]byte, 32*1024)
-	for remaining > 0 {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			if _, writeErr := writer.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("write failed: %w", writeErr)
-			}
-			remaining -= int64(n)
-		}
-		if err != nil {
-			if err != io.EOF {
-				return fmt.Errorf("read failed: %w", err)
-			}
-			break
-		}
-	}
-
-	response, err := t.readResponse()
-	if err != nil {
-		return fmt.Errorf("read response failed: %w", err)
-	}
-
-	if !strings.HasPrefix(response, "OK") {
-		return fmt.Errorf("server error: %s", response)
-	}
-
-	parts := strings.Fields(response)
-	if len(parts) >= 3 {
-		expectedChecksum := parts[1]
-		actualChecksum := hex.EncodeToString(hasher.Sum(nil))
-		if expectedChecksum != actualChecksum {
-			return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
-		}
-	}
-
-	return nil
+	return t.ReceiveStream(remotePath, file)
 }
 
 func (t *ServerTransport) ReceiveStream(remotePath string, writer io.Writer) error {
-	if err := t.sendCommand(fmt.Sprintf("RECEIVE %s", remotePath)); err != nil {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.conn == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	if err := t.sendCommand(fmt.Sprintf("%s %s", transferCommand("RECEIVE", t.config.Checksum), base64.StdEncoding.EncodeToString([]byte(remotePath)))); err != nil {
 		return fmt.Errorf("send command failed: %w", err)
 	}
 
@@ -235,58 +175,30 @@ func (t *ServerTransport) ReceiveStream(remotePath string, writer io.Writer) err
 		return fmt.Errorf("read response failed: %w", err)
 	}
 
-	if !strings.HasPrefix(response, "OK SIZE") {
-		return fmt.Errorf("server error: %s", response)
-	}
-
-	sizeStr := strings.TrimPrefix(response, "OK SIZE ")
-	size, err := strconv.ParseInt(sizeStr, 10, 64)
+	size, err := receiveSize(response)
 	if err != nil {
 		return fmt.Errorf("parse size failed: %w", err)
 	}
 
-	hasher := sha256.New()
-	copyWriter := io.MultiWriter(writer, hasher)
-
-	remaining := size
-	buf := make([]byte, 32*1024)
-	for remaining > 0 {
-		n, err := t.conn.Read(buf)
-		if n > 0 {
-			if _, writeErr := copyWriter.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("write failed: %w", writeErr)
-			}
-			remaining -= int64(n)
-		}
-		if err != nil {
-			if err != io.EOF {
-				return fmt.Errorf("read failed: %w", err)
-			}
-			break
-		}
+	digest, err := copyPayload(writer, t.reader, size, t.config)
+	if err != nil {
+		return fmt.Errorf("transfer failed: %w", err)
 	}
 
-	checksumLine, err := t.reader.ReadString('\n')
+	checksumLine, err := t.readResponse()
 	if err != nil {
 		return fmt.Errorf("read checksum failed: %w", err)
 	}
 
-	checksumLine = strings.TrimSpace(checksumLine)
-	if strings.HasPrefix(checksumLine, "CHECKSUM ") {
-		expectedChecksum := strings.TrimPrefix(checksumLine, "CHECKSUM ")
-		actualChecksum := hex.EncodeToString(hasher.Sum(nil))
-		if expectedChecksum != actualChecksum {
-			return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
-		}
-	}
-
-	return nil
+	return validateTrailer(checksumLine, size, digest, t.config.Checksum)
 }
 
 func (t *ServerTransport) Close() error {
 	if t.conn != nil {
 		t.sendCommand("QUIT")
-		return t.conn.Close()
+		err := t.conn.Close()
+		t.conn = nil
+		return err
 	}
 	return nil
 }
@@ -295,19 +207,11 @@ func (t *ServerTransport) IsConnected() bool {
 	return t.conn != nil
 }
 
-func (t *ServerTransport) Name() string {
-	return "server"
-}
-
 func (t *ServerTransport) sendCommand(cmd string) error {
 	_, err := fmt.Fprintf(t.conn, "%s\n", cmd)
 	return err
 }
 
 func (t *ServerTransport) readResponse() (string, error) {
-	line, err := t.reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(line), nil
+	return readProtocolLine(t.reader)
 }

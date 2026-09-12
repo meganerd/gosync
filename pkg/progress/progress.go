@@ -7,26 +7,26 @@ import (
 )
 
 type Progress struct {
-	totalBytes    int64
- transferredBytes int64
-	totalFiles    int
-	completedFiles int
-	failedFiles   int
-	startTime     time.Time
-	mu            sync.RWMutex
-	callback      func(ProgressInfo)
+	totalBytes       int64
+	transferredBytes int64
+	totalFiles       int
+	completedFiles   int
+	failedFiles      int
+	startTime        time.Time
+	mu               sync.RWMutex
+	callback         func(ProgressInfo)
 }
 
 type ProgressInfo struct {
-	TotalBytes      int64
+	TotalBytes       int64
 	TransferredBytes int64
-	TotalFiles      int
-	CompletedFiles  int
-	FailedFiles     int
-	Speed           float64
-	Elapsed         time.Duration
-	Percent         float64
-	ETA             time.Duration
+	TotalFiles       int
+	CompletedFiles   int
+	FailedFiles      int
+	Speed            float64
+	Elapsed          time.Duration
+	Percent          float64
+	ETA              time.Duration
 }
 
 func NewProgress(totalBytes int64, totalFiles int) *Progress {
@@ -41,6 +41,13 @@ func (p *Progress) SetCallback(fn func(ProgressInfo)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.callback = fn
+}
+
+// AddBytes records live payload progress without completing a file.
+func (p *Progress) AddBytes(bytes int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.transferredBytes += bytes
 }
 
 func (p *Progress) Update(bytes int64, success bool) {
@@ -79,15 +86,15 @@ func (p *Progress) getInfo() ProgressInfo {
 	}
 
 	return ProgressInfo{
-		TotalBytes:      p.totalBytes,
+		TotalBytes:       p.totalBytes,
 		TransferredBytes: p.transferredBytes,
-		TotalFiles:      p.totalFiles,
-		CompletedFiles:  p.completedFiles,
-		FailedFiles:     p.failedFiles,
-		Speed:           speed,
-		Elapsed:         elapsed,
-		Percent:         percent,
-		ETA:             eta,
+		TotalFiles:       p.totalFiles,
+		CompletedFiles:   p.completedFiles,
+		FailedFiles:      p.failedFiles,
+		Speed:            speed,
+		Elapsed:          elapsed,
+		Percent:          percent,
+		ETA:              eta,
 	}
 }
 

@@ -2,6 +2,7 @@ package progress
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -41,6 +42,30 @@ func TestProgressUpdateCallbackAndString(t *testing.T) {
 	text := p.String()
 	if !strings.Contains(text, "%") || !strings.Contains(text, "ETA") {
 		t.Fatalf("String() = %q", text)
+	}
+}
+
+func TestAddBytesConcurrent(t *testing.T) {
+	p := NewProgress(1000, 1)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				p.AddBytes(1)
+				p.GetInfo()
+			}
+		}()
+	}
+	wg.Wait()
+	info := p.GetInfo()
+	if info.TransferredBytes != 1000 || info.CompletedFiles != 0 || info.FailedFiles != 0 {
+		t.Fatalf("incremental progress = %+v", info)
+	}
+	p.Update(0, true)
+	if info = p.GetInfo(); info.TransferredBytes != 1000 || info.CompletedFiles != 1 {
+		t.Fatalf("completed progress = %+v", info)
 	}
 }
 

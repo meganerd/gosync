@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -72,6 +73,71 @@ func TestServerHandleClientPingListAndUnknown(t *testing.T) {
 	}
 }
 
+func TestServerHandleClientSendWithSpacesInPath(t *testing.T) {
+	baseDir := t.TempDir()
+	server := NewServer("127.0.0.1:0", baseDir)
+
+	data := []byte("spaced payload")
+	client, conn := net.Pipe()
+	go server.handleClient(conn)
+	reader := bufio.NewReader(client)
+
+	spacedPath := "My Movie Folder/My Movie 2024 1080p.mkv"
+	if _, err := fmt.Fprintf(client, "SEND %d %s\n", len(data), base64.StdEncoding.EncodeToString([]byte(spacedPath))); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, err := client.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(response), "OK ") {
+		t.Fatalf("SEND response = %q", response)
+	}
+	stored, err := os.ReadFile(filepath.Join(baseDir, filepath.FromSlash(spacedPath)))
+	if err != nil {
+		t.Fatalf("spaced path not stored intact: %v", err)
+	}
+	if !bytes.Equal(stored, data) {
+		t.Fatalf("stored data = %q, want %q", stored, data)
+	}
+	client.Close()
+
+	client2, conn2 := net.Pipe()
+	defer client2.Close()
+	go server.handleClient(conn2)
+	reader2 := bufio.NewReader(client2)
+
+	if _, err := fmt.Fprint(client2, "RECEIVE "+base64.StdEncoding.EncodeToString([]byte(spacedPath))+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	header, err := reader2.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(header) != "OK SIZE 14" {
+		t.Fatalf("RECEIVE header = %q", header)
+	}
+	body := make([]byte, 14)
+	if _, err := io.ReadFull(reader2, body); err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "spaced payload" {
+		t.Fatalf("RECEIVE body = %q", body)
+	}
+	checksumLine, err := reader2.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverChecksum := sha256.Sum256([]byte("spaced payload"))
+	if strings.TrimSpace(checksumLine) != "CHECKSUM "+hex.EncodeToString(serverChecksum[:]) {
+		t.Fatalf("checksum line = %q", checksumLine)
+	}
+}
+
 func TestServerHandleClientSendAndReceive(t *testing.T) {
 	baseDir := t.TempDir()
 	server := NewServer("127.0.0.1:0", baseDir)
@@ -81,7 +147,7 @@ func TestServerHandleClientSendAndReceive(t *testing.T) {
 	go server.handleClient(conn)
 	reader := bufio.NewReader(client)
 
-	if _, err := fmt.Fprintf(client, "SEND nested/file.txt %d\n", len(data)); err != nil {
+	if _, err := fmt.Fprintf(client, "SEND %d %s\n", len(data), base64.StdEncoding.EncodeToString([]byte("nested/file.txt"))); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(10 * time.Millisecond)
@@ -115,7 +181,7 @@ func TestServerHandleClientSendAndReceive(t *testing.T) {
 	go server.handleClient(conn2)
 	reader2 := bufio.NewReader(client2)
 
-	if _, err := fmt.Fprint(client2, "RECEIVE from-server.txt\n"); err != nil {
+	if _, err := fmt.Fprint(client2, "RECEIVE "+base64.StdEncoding.EncodeToString([]byte("from-server.txt"))+"\n"); err != nil {
 		t.Fatal(err)
 	}
 	header, err := reader2.ReadString('\n')
