@@ -12,21 +12,29 @@ import (
 type fakeTransport struct {
 	delay         time.Duration
 	failPaths     map[string]error
+	started       chan struct{}
 	mu            sync.Mutex
 	current       int
 	maxConcurrent int
 	remotePaths   []string
 }
 
-func (f *fakeTransport) Name() string { return "fake" }
-func (f *fakeTransport) Connect(string, int) error { return nil }
-func (f *fakeTransport) ReceiveFile(string, string) error { return nil }
+func (f *fakeTransport) Name() string                              { return "fake" }
+func (f *fakeTransport) Connect(string, int) error                 { return nil }
+func (f *fakeTransport) ReceiveFile(string, string) error          { return nil }
 func (f *fakeTransport) SendStream(io.Reader, string, int64) error { return nil }
-func (f *fakeTransport) ReceiveStream(string, io.Writer) error { return nil }
-func (f *fakeTransport) Close() error { return nil }
-func (f *fakeTransport) IsConnected() bool { return true }
+func (f *fakeTransport) ReceiveStream(string, io.Writer) error     { return nil }
+func (f *fakeTransport) Close() error                              { return nil }
+func (f *fakeTransport) IsConnected() bool                         { return true }
 
 func (f *fakeTransport) SendFile(localPath, remotePath string) error {
+	if f.started != nil {
+		select {
+		case <-f.started:
+		default:
+			close(f.started)
+		}
+	}
 	f.mu.Lock()
 	f.current++
 	if f.current > f.maxConcurrent {
@@ -121,14 +129,19 @@ func TestWorkerPoolProcessesJobsConcurrentlyAndTracksStats(t *testing.T) {
 }
 
 func TestWorkerPoolCloseCancelsOutstandingWork(t *testing.T) {
-	transport := &fakeTransport{delay: 200 * time.Millisecond, failPaths: map[string]error{}}
+	started := make(chan struct{})
+	transport := &fakeTransport{delay: 200 * time.Millisecond, failPaths: map[string]error{}, started: started}
 	pool := NewWorkerPool(1, transport)
 	pool.Start()
 
 	pool.Submit(TransferJob{LocalPath: "first", RemotePath: "remote-first", Size: 10})
 	pool.Submit(TransferJob{LocalPath: "second", RemotePath: "remote-second", Size: 10})
 
-	time.Sleep(30 * time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker never started processing a job")
+	}
 	pool.Close()
 
 	stats := pool.GetStats()
