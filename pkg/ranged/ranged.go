@@ -30,6 +30,11 @@ const (
 )
 
 const (
+	// DefaultConnections enables the measured QUIC fast path without requiring
+	// callers to discover an opt-in flag. Four captured 92% of the eight-socket
+	// gain while keeping socket and receiver-write concurrency modest.
+	DefaultConnections = 4
+
 	// MaxConnections bounds sender sockets per file. N=4 captured 92% of the
 	// N=8 gain in benchmarks, so this is a generous ceiling, not a target.
 	MaxConnections = 16

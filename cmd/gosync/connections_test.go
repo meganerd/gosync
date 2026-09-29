@@ -41,7 +41,8 @@ func TestConnectionsCLI(t *testing.T) {
 		want      string
 		errorText string
 	}{
-		{"default is one", []string{"-transport", "quic", "-dry-run", "-quiet", source, "host:/target"}, "1", ""},
+		{"QUIC default is four", []string{"-transport", "quic", "-dry-run", "-quiet", source, "host:/target"}, "4", ""},
+		{"TCP implicit default stays one", []string{"-transport", "tcp", "-dry-run", "-quiet", source, "host:/target"}, "1", ""},
 		{"quic fan-out", []string{"-transport", "quic", "-connections", "4", "-dry-run", "-quiet", source, "host:/target"}, "4", ""},
 		{"quic maximum", []string{"-transport", "quic", "-connections", fmt.Sprint(ranged.MaxConnections), "-dry-run", "-quiet", source, "host:/target"}, fmt.Sprint(ranged.MaxConnections), ""},
 		{"quic with checksum", []string{"-transport", "quic", "-connections", "2", "-checksum", "-dry-run", "-quiet", source, "host:/target"}, "2", ""},

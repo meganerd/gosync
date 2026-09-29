@@ -290,13 +290,13 @@ gosync --deploy --buffer-size 262144 source host:/destination/
 ### QUIC data connections (fan-out)
 
 `--connections N` sets the number of QUIC **data connections (sender sockets)**
-used per file (default `1`, range `1` through `16`). Each connection is an
+used per file (QUIC default `4`, range `1` through `16`). Each connection is an
 independent UDP socket with its own QUIC connection, dialing the single port the
 receiver advertises, and carrying one contiguous byte range of the file.
 
-- **The default `1` reproduces current behavior exactly.** It sends the existing
+- **Explicit `--connections 1` reproduces legacy behavior exactly.** It sends the existing
   `SEND`/`SEND-NOHASH` commands, asks the receiver nothing new, and opens no
-  additional sockets.
+  additional sockets. TCP, SSH, and server transports implicitly remain at one.
 - **QUIC data transfer only.** A value above 1 with `--transport tcp`, `server`
   or `ssh` is rejected rather than silently ignored, the same way
   `--transport ssh --checksum=true` is rejected.

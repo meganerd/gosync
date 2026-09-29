@@ -325,9 +325,9 @@ standalone SSH transport are rejected rather than silently ignored.
 ### QUIC connection fan-out
 
 `-connections N` sets how many **QUIC data connections (sender sockets)** carry a
-single file, from `1` to `16`. The default **1 reproduces the current wire
-behavior exactly**: the same `SEND`/`SEND-NOHASH` commands, no capability query
-and no extra sockets.
+single file, from `1` to `16`. QUIC defaults to **4** so large single-file
+transfers use fan-out without an opt-in flag. Other transports remain at one;
+pass `-connections 1` to reproduce the legacy QUIC wire behavior exactly.
 
 ```sh
 # Four sender sockets per file; the receiver keeps one port.
@@ -363,8 +363,9 @@ The measurement that motivates fan-out is in
 [the design](docs/multi-connection-quic-design.md): sender socket count carried
 QUIC scaling in a standalone harness (901 → 2179 MiB/s at eight sockets), while
 extra streams or extra connections on one socket did not. Those are harness
-numbers without disk I/O or framing, so no gosync performance claim is made
-here; the default stays 1 until the live matrix is run.
+numbers without disk I/O or framing, so no fixed end-to-end speed is promised.
+Four connections captured 92% of the eight-connection gain and is the QUIC
+default.
 
 Historically, with application SHA-256 active on both endpoints, three rotated-order
 **TCP** full-ISO trials per size on Agrippa's RAM disk measured

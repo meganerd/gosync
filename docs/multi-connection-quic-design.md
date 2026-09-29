@@ -70,10 +70,10 @@ Non-goals: no new authentication model, no cross-file striping, no change to the
 
 ## 3. Configuration
 
-New flag, defaulting to current behavior:
+New flag, initially defaulting to current behavior:
 
 ```text
--connections N   QUIC data connections per file (1–16, default 1)
+-connections N   QUIC data connections per file (1–16, default 4)
 ```
 
 - `1` reproduces today's wire behavior exactly, including command names.
@@ -299,9 +299,10 @@ Resolved by the asymmetric experiment:
 
 Open questions remaining:
 
-1. Default value for `-connections` once measured against real gosync; it stays `1` until
-   then. Automatic selection is tracked separately as "Auto-tune QUIC connection fan-out
-   count" (`5dc8e7fd-afeb-483a-b97c-235f5f9ae837`) and is deliberately out of scope here.
+1. The live 201 MB/s result on the one-connection default confirmed that the
+   implemented fan-out was not being exercised. Four connections, which
+   captured 92% of the eight-connection harness gain, is now the QUIC default;
+   explicit `-connections 1` remains available.
 2. Whether the 64 MiB fan-out threshold is the right cutover point.
 3. Interaction with `-resume`, which currently reasons about whole files.
 4. Whether commit-time whole-file verification should also be offered for

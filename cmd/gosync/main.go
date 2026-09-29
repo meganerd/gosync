@@ -32,7 +32,7 @@ func main() {
 		workers       = flag.Int("workers", 0, "Number of parallel workers (0 = adaptive)")
 		transportType = flag.String("transport", "quic", "File-transfer protocol: quic (UDP), tcp, ssh, server; -deploy supports quic/tcp/server and always uses SSH for setup")
 		bufferSize    = flag.Int("buffer-size", checksums.DefaultBufferSize, "QUIC/TCP/server copy buffer size in bytes (4096–4194304); four buffers with -checksum, one without; -deploy sets both endpoints")
-		connections   = flag.Int("connections", 1, "QUIC data connections (sender sockets) per file (1–16); >1 requires -transport quic and is skipped for files below 64 MiB; 1 keeps current behavior")
+		connections   = flag.Int("connections", ranged.DefaultConnections, "QUIC data connections (sender sockets) per file (1–16); defaults to 4 for QUIC and 1 for other transports; fan-out is skipped for files below 64 MiB")
 		bandwidth     = flag.Int64("bandwidth", 0, "Bandwidth limit in bytes/sec (0 = unlimited)")
 		compression   = flag.Bool("compress", false, "Enable compression")
 		dryRun        = flag.Bool("dry-run", false, "Show what would be transferred")
@@ -92,12 +92,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: -buffer-size: %v\n", err)
 		os.Exit(1)
 	}
-	bufferExplicit := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "buffer-size" {
-			bufferExplicit = true
-		}
-	})
+	bufferExplicit := flagWasSet("buffer-size")
 	if bufferExplicit && *transportType == "ssh" {
 		fmt.Fprintln(os.Stderr, "Error: -buffer-size applies only to QUIC/TCP/server transfers")
 		os.Exit(1)
@@ -112,9 +107,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: -connections must be between 1 and %d\n", ranged.MaxConnections)
 		os.Exit(1)
 	}
-	if *connections > 1 && *transportType != "quic" {
+	connectionsExplicit := flagWasSet("connections")
+	if *connections > 1 && *transportType != "quic" && connectionsExplicit {
 		fmt.Fprintln(os.Stderr, "Error: -connections above 1 applies only to QUIC data transfer; multi-socket fan-out is not implemented for tcp, server or ssh")
 		os.Exit(1)
+	}
+	if *transportType != "quic" && !connectionsExplicit {
+		*connections = 1
 	}
 
 	tlsOptions := transferTLSOptions{certFile: *certFile, remoteCert: *remoteCert, remoteKey: *remoteKey}
@@ -332,7 +331,7 @@ func runServe() {
 	baseDir := serveCmd.String("base", "/tmp/gosync-receive", "Base directory for received files")
 	transportType := serveCmd.String("transport", "tcp", "Receiver protocol: tcp or quic (UDP with TLS)")
 	bufferSize := serveCmd.Int("buffer-size", checksums.DefaultBufferSize, "Copy buffer size in bytes (4096–4194304); four buffers with checksums, one without")
-	connections := serveCmd.Int("connections", 1, "QUIC receive sockets bound to the listen port with SO_REUSEPORT (1–16); >1 requires -transport quic")
+	connections := serveCmd.Int("connections", ranged.DefaultConnections, "QUIC receive sockets bound to the listen port with SO_REUSEPORT (1–16); defaults to 4 for QUIC and 1 for TCP")
 
 	certFile := serveCmd.String("cert", "", "QUIC certificate PEM path (requires -key)")
 	keyFile := serveCmd.String("key", "", "QUIC private-key path (requires -cert)")
@@ -346,6 +345,10 @@ func runServe() {
 	}
 
 	serveCmd.Parse(os.Args[2:])
+	connectionsExplicit := flagSetWasSet(serveCmd, "connections")
+	if *transportType != "quic" && !connectionsExplicit {
+		*connections = 1
+	}
 
 	srv := server.NewServer(*listenAddr, *baseDir)
 	if err := srv.SetTransport(*transportType); err != nil {
@@ -391,6 +394,16 @@ func configureServerConnections(srv any, connections int, transportType string) 
 		return fmt.Errorf("this receiver build does not support multi-socket receive")
 	}
 	return nil
+}
+
+func flagWasSet(name string) bool {
+	return flagSetWasSet(flag.CommandLine, name)
+}
+
+func flagSetWasSet(flags *flag.FlagSet, name string) bool {
+	set := false
+	flags.Visit(func(f *flag.Flag) { set = set || f.Name == name })
+	return set
 }
 
 func extractHost(dest string) string {
