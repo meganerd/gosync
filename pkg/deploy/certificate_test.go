@@ -363,6 +363,9 @@ func TestBoundedCommand(t *testing.T) {
 	if _, err := boundedOutput("sh", []string{"-c", "head -c 8192 /dev/zero >&2"}, 4); !errors.Is(err, errOutputLimit) {
 		t.Fatalf("oversized stderr error = %v", err)
 	}
+	if _, err := boundedOutput("sh", []string{"-c", "printf 'ssh: host key verification failed' >&2; exit 255"}, 4); err == nil || !strings.Contains(err.Error(), "host key verification failed") {
+		t.Fatalf("command error omitted stderr: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	started := time.Now()

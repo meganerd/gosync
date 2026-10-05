@@ -149,6 +149,10 @@ func boundedOutput(name string, args []string, limit int) ([]byte, error) {
 	output := &boundedBuffer{limit: limit}
 	stderr := &boundedBuffer{limit: 4096}
 	if err := runCommand(name, args, output, stderr); err != nil {
+		detail := strings.TrimSpace(stderr.buffer.String())
+		if detail != "" {
+			return output.buffer.Bytes(), fmt.Errorf("%s: %w: %s", name, err, detail)
+		}
 		return output.buffer.Bytes(), fmt.Errorf("%s: %w", name, err)
 	}
 	return output.buffer.Bytes(), nil
