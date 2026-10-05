@@ -6,8 +6,9 @@ mode=${1:-}
 case "$mode" in
   push)
     : "${GITHUB_MIRROR_URL:?GITHUB_MIRROR_URL is required}"
+    source_revision=${CI_COMMIT_SHA:-HEAD}
     git push "$GITHUB_MIRROR_URL" \
-      "refs/heads/${CI_DEFAULT_BRANCH:-main}:refs/heads/${CI_DEFAULT_BRANCH:-main}" \
+      "${source_revision}:refs/heads/${CI_DEFAULT_BRANCH:-main}" \
       'refs/tags/*:refs/tags/*'
     ;;
 

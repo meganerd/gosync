@@ -101,7 +101,9 @@ build:windows:arm64:
 
 mirror:github:push:
   stage: mirror
-  image: alpine/git:2.49.1
+  image:
+    name: alpine/git:2.49.1
+    entrypoint: [""]
   needs: []
   variables:
     GIT_STRATEGY: fetch
@@ -120,7 +122,9 @@ mirror:github:push:
 
 mirror:github:pull-requests:
   stage: mirror
-  image: alpine/git:2.49.1
+  image:
+    name: alpine/git:2.49.1
+    entrypoint: [""]
   needs: []
   variables:
     GIT_STRATEGY: fetch
