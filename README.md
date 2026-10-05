@@ -207,6 +207,15 @@ device. In deployment mode the destination remains a receiver directory, so
 is required. Pipes and character devices are rejected because they do not have
 a finite size for the transfer protocol.
 
+QUIC fan-out writes to a sibling `*.gosync-<token>.part` file and atomically
+renames it only after the receiver has flushed it successfully. Finalization of
+large images can take substantially longer than ordinary network operations;
+gosync scales the commit wait with image size. A `.part` left after an
+interrupted deployment is not automatically resumable because range state is
+held by the receiver process. If the sender reported all bytes transferred and
+the staging file has the exact source size, an operator can flush and rename it
+in place after performing whatever integrity verification the workload needs.
+
 `gosync serve --transport quic` runs the production QUIC receiver over UDP;
 `--transport tcp` selects TCP. The CLI reports the selected file-transfer transport
 and network protocol (unless quiet), separately identifying SSH deployment.

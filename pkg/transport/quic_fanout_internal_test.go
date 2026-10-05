@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gbjohnso/gosync/pkg/ranged"
 )
@@ -123,6 +124,16 @@ func TestValidateCommitReply(t *testing.T) {
 		if err := validateCommitReply(tc.line, 100, digest, tc.enabled); err == nil {
 			t.Fatalf("accepted %q (checksum=%v)", tc.line, tc.enabled)
 		}
+	}
+}
+
+func TestCommitTimeoutScalesForLargeFinalization(t *testing.T) {
+	q := NewQUICTransport(Config{Timeout: 30})
+	if got := q.commitTimeout(1 << 40); got < 24*time.Hour {
+		t.Fatalf("1 TiB commit timeout = %s, want at least 24h", got)
+	}
+	if got := q.commitTimeout(1); got < 5*time.Minute {
+		t.Fatalf("small commit timeout = %s, want at least 5m", got)
 	}
 }
 

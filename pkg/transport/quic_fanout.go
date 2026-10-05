@@ -12,6 +12,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gbjohnso/gosync/pkg/checksum"
 	"github.com/gbjohnso/gosync/pkg/ranged"
@@ -482,11 +483,25 @@ func (q *QUICTransport) commitRanges(token string, total int64, digest [sha256.S
 	if q.config.Checksum {
 		request = fmt.Sprintf("%s %s %d %x\n", ranged.CmdCommitHash, token, total, digest)
 	}
-	line, err := q.controlExchange(request)
+	line, err := q.controlExchangeTimeout(request, q.commitTimeout(total))
 	if err != nil {
 		return fmt.Errorf("commit failed: %w", err)
 	}
 	return validateCommitReply(line, total, digest, q.config.Checksum)
+}
+
+// A ranged transfer can finish writing quickly while fsync (and, with
+// checksums enabled, the receiver's full-file readback) takes much longer than
+// the ordinary network idle timeout. Size the commit wait for a conservative
+// 8 MiB/s finalization rate, with fixed setup margin, so a healthy commit is not
+// mistaken for a stalled network operation.
+func (q *QUICTransport) commitTimeout(total int64) time.Duration {
+	const bytesPerSecond = int64(8 * 1024 * 1024)
+	timeout := 5*time.Minute + time.Duration(total/bytesPerSecond)*time.Second
+	if timeout < q.timeout() {
+		return q.timeout()
+	}
+	return timeout
 }
 
 func (q *QUICTransport) abortRanges(token string) error {
@@ -502,10 +517,15 @@ func (q *QUICTransport) abortRanges(token string) error {
 
 // controlExchange runs a one-line request/response on the control connection.
 func (q *QUICTransport) controlExchange(request string) (line string, err error) {
+	return q.controlExchangeTimeout(request, q.timeout())
+}
+
+func (q *QUICTransport) controlExchangeTimeout(request string, timeout time.Duration) (line string, err error) {
 	stream, _, err := q.operation()
 	if err != nil {
 		return "", err
 	}
+	stream.idle = timeout
 	defer func() { finishQUICStream(stream.Stream, err) }()
 	if _, err = io.WriteString(stream, request); err != nil {
 		return "", fmt.Errorf("send command failed: %w", err)
