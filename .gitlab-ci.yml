@@ -2,6 +2,7 @@ stages:
   - test
   - build
   - deploy
+  - mirror
 
 variables:
   GO_VERSION: "1.25"
@@ -95,3 +96,37 @@ build:windows:arm64:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
+
+mirror:github:push:
+  stage: mirror
+  image: alpine/git:2.49.1
+  variables:
+    GIT_STRATEGY: fetch
+  before_script:
+    - test -n "$GITHUB_MIRROR_URL"
+  script:
+    - ./scripts/sync-github-mirror.sh push
+  resource_group: github-mirror
+  rules:
+    - if: $GITHUB_MIRROR_URL == null || $GITHUB_MIRROR_URL == ""
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+mirror:github:pull-requests:
+  stage: mirror
+  image: alpine/git:2.49.1
+  variables:
+    GIT_STRATEGY: fetch
+  before_script:
+    - test -n "$GITHUB_MIRROR_URL"
+    - test -n "$GITLAB_MIRROR_PUSH_URL"
+  script:
+    - ./scripts/sync-github-mirror.sh pull-requests
+  resource_group: github-mirror
+  rules:
+    - if: $GITHUB_MIRROR_URL == null || $GITHUB_MIRROR_URL == "" || $GITLAB_MIRROR_PUSH_URL == null || $GITLAB_MIRROR_PUSH_URL == ""
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
