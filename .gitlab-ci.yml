@@ -6,6 +6,8 @@ stages:
 
 variables:
   GO_VERSION: "1.25"
+  GITHUB_MIRROR_URL: "git@github.com:meganerd/gosync.git"
+  GITLAB_MIRROR_PUSH_URL: "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
 
 test:
   stage: test
@@ -100,15 +102,18 @@ build:windows:arm64:
 mirror:github:push:
   stage: mirror
   image: alpine/git:2.49.1
+  needs: []
   variables:
     GIT_STRATEGY: fetch
   before_script:
-    - test -n "$GITHUB_MIRROR_URL"
+    - test -f "$GITHUB_MIRROR_SSH_KEY"
+    - chmod 400 "$GITHUB_MIRROR_SSH_KEY"
+    - export GIT_SSH_COMMAND="ssh -i $GITHUB_MIRROR_SSH_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
   script:
     - ./scripts/sync-github-mirror.sh push
   resource_group: github-mirror
   rules:
-    - if: $GITHUB_MIRROR_URL == null || $GITHUB_MIRROR_URL == ""
+    - if: $GITHUB_MIRROR_SSH_KEY == null || $GITHUB_MIRROR_SSH_KEY == ""
       when: never
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
@@ -116,16 +121,18 @@ mirror:github:push:
 mirror:github:pull-requests:
   stage: mirror
   image: alpine/git:2.49.1
+  needs: []
   variables:
     GIT_STRATEGY: fetch
   before_script:
-    - test -n "$GITHUB_MIRROR_URL"
-    - test -n "$GITLAB_MIRROR_PUSH_URL"
+    - test -f "$GITHUB_MIRROR_SSH_KEY"
+    - chmod 400 "$GITHUB_MIRROR_SSH_KEY"
+    - export GIT_SSH_COMMAND="ssh -i $GITHUB_MIRROR_SSH_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
   script:
     - ./scripts/sync-github-mirror.sh pull-requests
   resource_group: github-mirror
   rules:
-    - if: $GITHUB_MIRROR_URL == null || $GITHUB_MIRROR_URL == "" || $GITLAB_MIRROR_PUSH_URL == null || $GITLAB_MIRROR_PUSH_URL == ""
+    - if: $GITHUB_MIRROR_SSH_KEY == null || $GITHUB_MIRROR_SSH_KEY == ""
       when: never
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web"

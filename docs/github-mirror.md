@@ -6,16 +6,15 @@ requests into review-only GitLab branches.
 
 ## Required CI/CD variables
 
-Configure these masked, protected variables in the GitLab project:
+Configure this protected, file-type variable in the GitLab project:
 
-- `GITHUB_MIRROR_URL`: an authenticated Git URL with read/write access to
-  `github.com/meganerd/gosync`, such as an SSH URL using a dedicated deploy key.
-- `GITLAB_MIRROR_PUSH_URL`: an authenticated Git URL with permission to create
-  branches in the GitLab project. It is used only by the inbound job.
+- `GITHUB_MIRROR_SSH_KEY`: the private half of a dedicated GitHub deploy key
+  with read/write access to `github.com/meganerd/gosync`.
 
-Do not put credentials directly in `.gitlab-ci.yml` or in a repository remote.
-For SSH URLs, install the private key and known-host entries through GitLab's
-file-type CI/CD variables and runner setup.
+GitLab inbound writes use the pipeline's short-lived `CI_JOB_TOKEN`. Enable
+"Allow Git push requests to the repository" for CI job tokens in the GitLab
+project settings. Do not put credentials directly in `.gitlab-ci.yml` or in a
+repository remote.
 
 ## Pipeline behavior
 
@@ -33,6 +32,9 @@ Create a scheduled pipeline (for example, every 15 minutes) on the default
 branch to keep GitHub PR branches current. Closed PR branches are intentionally
 retained; delete them after the corresponding GitLab merge request is merged or
 closed.
+
+The mirror jobs use an empty `needs` dependency list so repository
+synchronization can proceed even if an unrelated test or build job fails.
 
 ## Local verification
 
