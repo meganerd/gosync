@@ -80,6 +80,15 @@ func (s *SSHTransport) SendFile(localPath, remotePath string) error {
 	return s.SendStream(file, remotePath, stat.Size())
 }
 
+func (s *SSHTransport) SendSizedFile(localPath, remotePath string, size int64) error {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open file failed: %w", err)
+	}
+	defer file.Close()
+	return s.SendStream(file, remotePath, size)
+}
+
 func (s *SSHTransport) ReceiveFile(remotePath, localPath string) error {
 	file, err := os.Create(localPath)
 	if err != nil {

@@ -33,6 +33,12 @@ type Transport interface {
 	IsConnected() bool
 }
 
+// SizedFileSender transfers a path using a size discovered independently of
+// os.FileInfo.Size. Linux block devices require this because stat reports zero.
+type SizedFileSender interface {
+	SendSizedFile(localPath, remotePath string, size int64) error
+}
+
 // FileInfo represents metadata about a file for transfer.
 type FileInfo struct {
 	Path    string

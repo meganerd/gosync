@@ -148,6 +148,7 @@ func (s *Sync) Run() error {
 			LocalPath:  file.Path,
 			RemotePath: remotePath,
 			Size:       file.Size,
+			IsDevice:   file.IsDevice,
 			Priority:   file.Priority,
 		}
 		s.pool.Submit(job)

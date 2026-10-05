@@ -199,6 +199,14 @@ silent TCP override. SSH handles setup and certificate retrieval; actual QUIC fi
 data travels directly over UDP, authenticated with the retrieved TLS leaf pin,
 not through an SSH tunnel.
 
+On Linux, a block device can be used as a single-file source. gosync reads its
+capacity with `BLKGETSIZE64`; the invoking user must have permission to open the
+device. In deployment mode the destination remains a receiver directory, so
+`gosync --deploy /dev/nvme2n1 host:/recovery/image` writes
+`/recovery/image/nvme2n1`. Rename that completed file if a specific image name
+is required. Pipes and character devices are rejected because they do not have
+a finite size for the transfer protocol.
+
 `gosync serve --transport quic` runs the production QUIC receiver over UDP;
 `--transport tcp` selects TCP. The CLI reports the selected file-transfer transport
 and network protocol (unless quiet), separately identifying SSH deployment.

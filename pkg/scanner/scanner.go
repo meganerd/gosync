@@ -8,11 +8,11 @@ import (
 )
 
 type Scanner struct {
-	roots       []string
-	excludes    []string
-	includes    []string
-	files       []FileInfo
-	mu          sync.RWMutex
+	roots    []string
+	excludes []string
+	includes []string
+	files    []FileInfo
+	mu       sync.RWMutex
 }
 
 type FileInfo struct {
@@ -20,6 +20,7 @@ type FileInfo struct {
 	Size     int64
 	ModTime  int64
 	IsDir    bool
+	IsDevice bool
 	Priority int
 }
 
@@ -47,12 +48,17 @@ func (s *Scanner) Scan() ([]FileInfo, error) {
 			if !s.shouldInclude(root) {
 				continue
 			}
+			size, isDevice, err := sourceSize(root, info)
+			if err != nil {
+				return nil, err
+			}
 			s.files = append(s.files, FileInfo{
 				Path:     root,
-				Size:     info.Size(),
+				Size:     size,
 				ModTime:  info.ModTime().Unix(),
 				IsDir:    false,
-				Priority: s.calculatePriority(info.Size()),
+				IsDevice: isDevice,
+				Priority: s.calculatePriority(size),
 			})
 			continue
 		}
@@ -74,12 +80,17 @@ func (s *Scanner) Scan() ([]FileInfo, error) {
 				return nil
 			}
 
+			size, isDevice, err := sourceSize(path, info)
+			if err != nil {
+				return err
+			}
 			s.files = append(s.files, FileInfo{
 				Path:     path,
-				Size:     info.Size(),
+				Size:     size,
 				ModTime:  info.ModTime().Unix(),
 				IsDir:    false,
-				Priority: s.calculatePriority(info.Size()),
+				IsDevice: isDevice,
+				Priority: s.calculatePriority(size),
 			})
 
 			return nil

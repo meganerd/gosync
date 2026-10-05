@@ -206,6 +206,15 @@ func (q *QUICTransport) SendFile(localPath, remotePath string) error {
 	return q.SendStream(file, remotePath, stat.Size())
 }
 
+func (q *QUICTransport) SendSizedFile(localPath, remotePath string, size int64) error {
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open file failed: %w", err)
+	}
+	defer file.Close()
+	return q.SendStream(file, remotePath, size)
+}
+
 func (q *QUICTransport) ReceiveFile(remotePath, localPath string) error {
 	file, err := os.Create(localPath)
 	if err != nil {

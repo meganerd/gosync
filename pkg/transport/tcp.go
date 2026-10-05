@@ -128,6 +128,17 @@ func (t *TCPTransport) SendFile(localPath, remotePath string) error {
 	return t.sendStreamLocked(file, remotePath, stat.Size())
 }
 
+func (t *TCPTransport) SendSizedFile(localPath, remotePath string, size int64) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	file, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("open file failed: %w", err)
+	}
+	defer file.Close()
+	return t.sendStreamLocked(file, remotePath, size)
+}
+
 func (t *TCPTransport) SendStream(reader io.Reader, remotePath string, size int64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()

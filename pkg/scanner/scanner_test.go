@@ -77,6 +77,51 @@ func TestScannerSingleFileRootHonorsPatterns(t *testing.T) {
 	}
 }
 
+type modeFileInfo struct {
+	os.FileInfo
+	mode os.FileMode
+}
+
+func (i modeFileInfo) Mode() os.FileMode { return i.mode }
+
+func TestSourceSizeUsesLinuxBlockDeviceCapacity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "device")
+	writeSizedFile(t, path, 1)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	previous := getBlockDeviceSize
+	getBlockDeviceSize = func(gotPath string) (int64, error) {
+		if gotPath != path {
+			t.Fatalf("block device path = %q, want %q", gotPath, path)
+		}
+		return 8 * 1024 * 1024 * 1024, nil
+	}
+	t.Cleanup(func() { getBlockDeviceSize = previous })
+
+	size, device, err := sourceSize(path, modeFileInfo{FileInfo: info, mode: os.ModeDevice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !device || size != 8*1024*1024*1024 {
+		t.Fatalf("sourceSize() = (%d, %t), want (8 GiB, true)", size, device)
+	}
+}
+
+func TestSourceSizeRejectsStreamingSpecialFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "special")
+	writeSizedFile(t, path, 1)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := sourceSize(path, modeFileInfo{FileInfo: info, mode: os.ModeNamedPipe}); err == nil {
+		t.Fatal("named pipe source was accepted without a finite size")
+	}
+}
+
 func TestScannerPriorityBoundariesAndAdaptiveWorkers(t *testing.T) {
 	s := NewScanner(nil, nil, nil)
 

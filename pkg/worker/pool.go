@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -9,23 +10,24 @@ import (
 )
 
 type WorkerPool struct {
-	workers    int
-	transport  transport.Transport
-	jobs       chan TransferJob
-	results    chan TransferResult
-	wg         sync.WaitGroup
-	ctx        context.Context
-	cancel     context.CancelFunc
+	workers          int
+	transport        transport.Transport
+	jobs             chan TransferJob
+	results          chan TransferResult
+	wg               sync.WaitGroup
+	ctx              context.Context
+	cancel           context.CancelFunc
 	closeJobsOnce    sync.Once
 	closeResultsOnce sync.Once
-	stats      Stats
-	statsMu    sync.RWMutex
+	stats            Stats
+	statsMu          sync.RWMutex
 }
 
 type TransferJob struct {
 	LocalPath  string
 	RemotePath string
 	Size       int64
+	IsDevice   bool
 	Priority   int
 }
 
@@ -38,13 +40,13 @@ type TransferResult struct {
 }
 
 type Stats struct {
-	TotalFiles    int
-	CompletedFiles int
-	FailedFiles   int
-	TotalBytes    int64
+	TotalFiles       int
+	CompletedFiles   int
+	FailedFiles      int
+	TotalBytes       int64
 	TransferredBytes int64
-	StartTime     time.Time
-	EndTime       time.Time
+	StartTime        time.Time
+	EndTime          time.Time
 }
 
 func NewWorkerPool(workers int, transport transport.Transport) *WorkerPool {
@@ -95,7 +97,16 @@ func (p *WorkerPool) worker(id int) {
 func (p *WorkerPool) processJob(id int, job TransferJob) TransferResult {
 	start := time.Now()
 
-	err := p.transport.SendFile(job.LocalPath, job.RemotePath)
+	var err error
+	if job.IsDevice {
+		if sender, ok := p.transport.(transport.SizedFileSender); ok {
+			err = sender.SendSizedFile(job.LocalPath, job.RemotePath, job.Size)
+		} else {
+			err = fmt.Errorf("transport %s does not support block-device sources", p.transport.Name())
+		}
+	} else {
+		err = p.transport.SendFile(job.LocalPath, job.RemotePath)
+	}
 	if err != nil {
 		p.updateStats(false, job.Size)
 		return TransferResult{

@@ -19,6 +19,16 @@ type fakeTransport struct {
 	remotePaths   []string
 }
 
+type sizedFakeTransport struct {
+	*fakeTransport
+	size int64
+}
+
+func (f *sizedFakeTransport) SendSizedFile(localPath, remotePath string, size int64) error {
+	f.size = size
+	return f.SendFile(localPath, remotePath)
+}
+
 func (f *fakeTransport) Name() string                              { return "fake" }
 func (f *fakeTransport) Connect(string, int) error                 { return nil }
 func (f *fakeTransport) ReceiveFile(string, string) error          { return nil }
@@ -156,4 +166,19 @@ func TestWorkerPoolCloseCancelsOutstandingWork(t *testing.T) {
 	}
 
 	_ = fmt.Sprintf("%v", stats)
+}
+
+func TestWorkerPoolUsesDiscoveredSizeForBlockDevice(t *testing.T) {
+	transport := &sizedFakeTransport{fakeTransport: &fakeTransport{failPaths: map[string]error{}}}
+	pool := NewWorkerPool(1, transport)
+	pool.Start()
+	pool.Submit(TransferJob{LocalPath: "/dev/test", RemotePath: "disk.img", Size: 4096, IsDevice: true})
+	pool.WaitForCompletion()
+
+	if transport.size != 4096 {
+		t.Fatalf("SendSizedFile size = %d, want 4096", transport.size)
+	}
+	if stats := pool.GetStats(); stats.CompletedFiles != 1 || stats.TransferredBytes != 4096 {
+		t.Fatalf("stats = %#v", stats)
+	}
 }
