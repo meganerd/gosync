@@ -2,6 +2,17 @@
 
 Adaptive parallel file transfer tool with selectable transport backends (QUIC, TCP, SSH).
 
+Use `--deploy` to transfer without manually installing or starting gosync on the
+destination host:
+
+```bash
+gosync --deploy /local/source user@remote:/destination
+```
+
+The flag uses SSH to copy, start, and clean up a temporary remote gosync
+receiver. File data then uses the selected `--transport` (`quic` by default,
+or `tcp`/`server`); it does not travel through the SSH connection.
+
 ## Features
 
 - **Adaptive Parallelism**: Automatically scales worker count based on available resources
