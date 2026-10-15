@@ -79,7 +79,13 @@ func copyNWithSHA256(dst io.Writer, src io.Reader, size int64, newHash func() ha
 }
 
 func copyNWithSHA256Buffer(dst io.Writer, src io.Reader, size int64, bufferSize int, newHash func() hash.Hash) (written int64, digest [sha256.Size]byte, err error) {
-	buffers := make([]byte, copySHA256Buffers*bufferSize)
+	var buffers []byte
+	if bufferSize == DefaultBufferSize {
+		buffers = shaCopyPool.get()
+		defer shaCopyPool.put(buffers)
+	} else {
+		buffers = make([]byte, copySHA256Buffers*bufferSize)
+	}
 	free := make(chan []byte, copySHA256Buffers)
 	pending := make(chan []byte, copySHA256Buffers)
 	done := make(chan struct{})

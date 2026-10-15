@@ -29,7 +29,13 @@ func CopyNBuffer(dst io.Writer, src io.Reader, size int64, bufferSize int) (writ
 		return 0, nil
 	}
 
-	buf := make([]byte, min(int64(bufferSize), size))
+	var buf []byte
+	if bufferSize == DefaultBufferSize && size >= int64(bufferSize) {
+		buf = plainCopyPool.get()
+		defer plainCopyPool.put(buf)
+	} else {
+		buf = make([]byte, min(int64(bufferSize), size))
+	}
 	emptyReads := 0
 	for written < size {
 		limit := min(int64(len(buf)), size-written)
