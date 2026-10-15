@@ -1,5 +1,52 @@
 # Agrippa RAM-disk comparison and profiles
 
+## Coz causal-profiler follow-up (2026-10-15)
+
+Coz 0.2.5 was installed from the official amd64 Debian release on the profiling
+host and independently smoke-tested with its bundled profile plus an instrumented
+C program. A gosync benchmark build then added a temporary native
+`COZ_PROGRESS_NAMED("quic-transfer")` point after each completed production QUIC
+transfer and was built with uncompressed DWARF and optimizations/inlining disabled.
+That instrumentation was not retained in the repository.
+
+Coz could not produce a valid Go profile. It segfaulted in `libcoz.so`'s signal
+handler shortly after the concurrent QUIC workload started, both normally and
+with Go asynchronous preemption disabled. The recommended `cozgo` wrapper does
+not change profiler/runtime behavior; it is a thin cgo wrapper around the same
+`coz.h` macros. Therefore no causal speedup claim can be made from Coz for this
+Go 1.26 workload. This is a profiler compatibility result, not a gosync crash or
+a transfer result.
+
+As a bounded fallback, the same production loopback workload was measured with
+Go's supported CPU and allocation profiler:
+
+```console
+go test -run '^$' \
+  -bench '^BenchmarkQUICSend/connections=4/checksum=false$' \
+  -benchtime=15s -count=1 \
+  -cpuprofile quic-4-nohash.cpu -memprofile quic-4-nohash.mem \
+  ./pkg/transport
+```
+
+The run completed 301 transfers at 60.21 ms/op and 1114.69 MB/s. CPU samples
+were dominated by Linux syscalls (44.73%), AES-GCM encrypt/decrypt (7.89%),
+memory movement (5.20%), and quic-go packet/frame processing. Allocation-space
+leaders were `x/net` address parsing and quic-go packet, frame, history, and
+receive-stream objects; the benchmark reported 13.80 MB and 240,740 allocations
+per 64 MiB transfer.
+
+The only clear application-level follow-up is to investigate pooling the four
+fan-out data connections across sequential large files. The current code creates
+and closes those data connections per file, so pooling could reduce TLS/QUIC
+handshake and connection-state churn for multi-file workloads. It is not expected
+to improve the original single 7.83 GB transfer materially: only four data
+connections are established for that entire file, and the profile places the
+steady-state cost in kernel and QUIC encryption/packet processing. Persistent
+pooling also expands retry, idle-timeout, receiver lifecycle, concurrency-cap,
+and stale-connection behavior, so it should be implemented only with a dedicated
+multi-file benchmark demonstrating a meaningful gain. No production change was
+made from this profile.
+
 ## Checksum semantics and historical evidence
 
 All gosync production network measurements recorded here predate the effective
