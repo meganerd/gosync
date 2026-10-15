@@ -61,6 +61,10 @@ No performance result for the new production no-hash mode is claimed here.
   hashed with the same SHA-256 algorithm and exchanged real commands/checksums;
   today's zero-value setup instead selects no-hash, as noted above.
   `SendFileProgressAtomic` adds a synchronous atomic byte-counter callback.
+  `BenchmarkServerTransportTCPBufferMatrix` uses the same deployed send path and
+  explicitly configures matching client/server buffers at 32 KiB, 256 KiB, and
+  1 MiB, each with application SHA-256 off and on. It is separate so the
+  historical benchmark names and zero-value configuration remain stable.
 - `pkg/transport/transfer_loop_benchmark_test.go`:
   `BenchmarkTransferLoopSynthetic` is a **synthetic sender-loop experiment**, not
   a transport or protocol implementation. It uses a `bytes.Reader`, an explicit
@@ -98,6 +102,18 @@ listener close in the historical implementation. Cleanup closes the connection/l
 and waits for the handler. A one-minute server connection deadline bounds a stuck
 transfer; keep each individual benchmark invocation comfortably below that
 limit. The outer Go test timeout provides another bound.
+
+Run the production buffer/checksum matrix with:
+
+```sh
+go test ./pkg/server -run '^$' \
+  -bench '^BenchmarkServerTransportTCPBufferMatrix$' \
+  -benchmem -count=3 -timeout=90s
+```
+
+The matrix is loopback-only and shares the baseline limitations above. Use it to
+screen variants before an end-to-end network/storage experiment, not to select a
+production default by itself.
 
 **Synthetic:** a fresh transfer buffer is allocated per operation, matching the
 historical synchronous production allocation lifecycle, not today's hash-enabled
