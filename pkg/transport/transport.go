@@ -69,6 +69,10 @@ type Config struct {
 	Checksum    bool  // verify SHA-256 with legacy commands; false negotiates NOHASH
 	Bandwidth   int64 // bytes per second, 0 = unlimited
 	BufferSize  int   // bytes per copy buffer for TCP/server/QUIC, 0 = default (32 KiB)
+	// ZeroCopy enables the experimental Linux regular-file-to-TCP sendfile path
+	// for checksum-off transfers without a progress callback. It is intentionally
+	// not exposed by the CLI while benchmark results remain inconclusive.
+	ZeroCopy bool
 	// Connections is the number of QUIC data connections (sender sockets) used
 	// per file, 1..ranged.MaxConnections; 0 and 1 both mean a single connection
 	// and reproduce the single-connection wire behavior exactly. Values above 1

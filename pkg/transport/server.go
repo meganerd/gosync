@@ -146,7 +146,7 @@ func (t *ServerTransport) sendStreamLocked(reader io.Reader, remotePath string, 
 		return fmt.Errorf("send command failed: %w", err)
 	}
 
-	digest, err := copyPayload(progressWriter{t.conn, t.progressCallback}, reader, size, t.config)
+	digest, err := copyStreamPayload(t.conn, reader, size, t.config, t.progressCallback)
 	if err != nil {
 		return fmt.Errorf("transfer failed: %w", err)
 	}

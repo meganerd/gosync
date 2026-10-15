@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/gbjohnso/gosync/pkg/checksum"
+	"github.com/gbjohnso/gosync/pkg/zerocopy"
 )
 
 // ChecksumConfigurer configures transfer verification before Connect is called.
@@ -21,6 +23,25 @@ type ChecksumConfigurer interface{ SetChecksum(enabled bool) }
 // the handshake. Transports without fan-out do not implement it.
 type ConnectionsConfigurer interface {
 	SetConnections(connections int) error
+}
+
+// copyFilePayload uses the Linux sendfile path only when hashing and live
+// progress are both disabled. All ineligible cases retain the portable,
+// bounded-buffer copier and its existing progress semantics.
+func copyFilePayload(dst io.Writer, src *os.File, size int64, config Config, progress func(int64)) ([sha256.Size]byte, error) {
+	if config.ZeroCopy && !config.Checksum && progress == nil {
+		if _, used, err := zerocopy.SendFileN(dst, src, size); used {
+			return [sha256.Size]byte{}, err
+		}
+	}
+	return copyPayload(progressWriter{dst, progress}, src, size, config)
+}
+
+func copyStreamPayload(dst io.Writer, src io.Reader, size int64, config Config, progress func(int64)) ([sha256.Size]byte, error) {
+	if file, ok := src.(*os.File); ok {
+		return copyFilePayload(dst, file, size, config, progress)
+	}
+	return copyPayload(progressWriter{dst, progress}, src, size, config)
 }
 
 func transferCommand(command string, enabled bool) string {

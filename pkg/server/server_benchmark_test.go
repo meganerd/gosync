@@ -18,7 +18,7 @@ import (
 // not a simulated peer. Only listener lifecycle is supplied by the benchmark:
 // Start cannot be cleanly stopped and polling Addr races with listener startup.
 func BenchmarkServerTransportTCP(b *testing.B) {
-	for _, mode := range []string{"SendFile", "SendFileProgressAtomic", "ReceiveFile"} {
+	for _, mode := range []string{"SendFile", "SendFileZeroCopy", "SendFileProgressAtomic", "ReceiveFile"} {
 		b.Run(mode, func(b *testing.B) {
 			benchmarkServerTransportTCP(b, mode, 0, false)
 		})
@@ -85,7 +85,11 @@ func benchmarkServerTransportTCP(b *testing.B, mode string, bufferSize int, hash
 		s.handleClient(conn)
 		done <- nil
 	}()
-	config := transport.Config{Timeout: 5, Checksum: hashing}
+	config := transport.Config{
+		Timeout:  5,
+		Checksum: hashing,
+		ZeroCopy: mode == "SendFileZeroCopy" || mode == "SendFileProgressAtomic",
+	}
 	if bufferSize != 0 {
 		config.BufferSize = bufferSize
 	}
