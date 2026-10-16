@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -13,8 +14,59 @@ import (
 	"sync"
 	"time"
 
+	gosyncarchive "github.com/gbjohnso/gosync/pkg/archive"
 	"github.com/gbjohnso/gosync/pkg/checksum"
 )
+
+func (t *TCPTransport) SendDirectory(ctx context.Context, localRoot, remoteRoot string, opts ArchiveOptions) (ArchiveResult, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return sendDirectory(ctx, t.conn, t.reader, localRoot, remoteRoot, opts)
+}
+
+func sendDirectory(ctx context.Context, conn net.Conn, reader *bufio.Reader, localRoot, remoteRoot string, opts ArchiveOptions) (ArchiveResult, error) {
+	var out ArchiveResult
+	if conn == nil {
+		return out, fmt.Errorf("not connected")
+	}
+	if _, err := io.WriteString(conn, "ARCHIVE-CAPS 1\n"); err != nil {
+		return out, err
+	}
+	line, err := readProtocolLine(reader)
+	if err != nil {
+		return out, fmt.Errorf("archive capability negotiation failed: %w", err)
+	}
+	if !strings.HasPrefix(line, "OK ARCHIVE-CAPS 1 ") {
+		return out, fmt.Errorf("receiver does not support archive streaming: %q", line)
+	}
+	policy := gosyncarchive.Policy(opts.Policy)
+	if policy == "" {
+		policy = gosyncarchive.PolicyPortable
+	}
+	cmd := fmt.Sprintf("ARCHIVE-BEGIN 1 %s sha256 %s", policy, base64.RawURLEncoding.EncodeToString([]byte(remoteRoot)))
+	if _, err = fmt.Fprintf(conn, "%s\n", cmd); err != nil {
+		return out, err
+	}
+	line, err = readProtocolLine(reader)
+	if err != nil {
+		return out, err
+	}
+	if !strings.HasPrefix(line, "OK ARCHIVE-BEGIN ") {
+		return out, fmt.Errorf("archive begin rejected: %q", line)
+	}
+	res, err := gosyncarchive.Send(ctx, conn, localRoot, gosyncarchive.Options{Policy: policy, BufferSize: opts.BufferSize})
+	if err != nil {
+		return out, err
+	}
+	line, err = readProtocolLine(reader)
+	if err != nil {
+		return out, fmt.Errorf("archive acknowledgement failed: %w", err)
+	}
+	if !strings.HasPrefix(line, "OK ARCHIVE-END ") {
+		return out, fmt.Errorf("archive rejected: %q", line)
+	}
+	return ArchiveResult{Entries: res.Entries, Bytes: res.Bytes, Warnings: res.Warnings}, nil
+}
 
 // TCPTransport is a protocol-correct gosync client for the TCP transport.
 // The wire protocol matches the gosync server (pkg/server):

@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	gosyncarchive "github.com/gbjohnso/gosync/pkg/archive"
 	"github.com/gbjohnso/gosync/pkg/checksum"
 	"github.com/gbjohnso/gosync/pkg/ranged"
 	"github.com/quic-go/quic-go"
@@ -281,6 +283,55 @@ func (s *Server) handleClient(conn net.Conn) {
 				continue
 			}
 			s.sendResponse(conn, "CAPS NOHASH")
+
+		case "ARCHIVE-CAPS":
+			if len(parts) != 2 || parts[1] != "1" {
+				s.sendError(conn, "unsupported archive version")
+				continue
+			}
+			caps := base64.RawURLEncoding.EncodeToString([]byte(`{"max_frame":1048576,"max_path":4096,"features":["mode","mtime_ns","symlink"],"hashes":["sha256"],"policies":["strict","portable","best-effort"]}`))
+			s.sendResponse(conn, "ARCHIVE-CAPS 1 "+caps)
+
+		case "ARCHIVE-BEGIN":
+			fields := strings.Fields(line)
+			if len(fields) != 5 || fields[1] != "1" || fields[3] != "sha256" {
+				s.sendError(conn, "invalid ARCHIVE-BEGIN")
+				continue
+			}
+			policy := gosyncarchive.Policy(fields[2])
+			if policy != gosyncarchive.PolicyStrict && policy != gosyncarchive.PolicyPortable && policy != gosyncarchive.PolicyBestEffort {
+				s.sendError(conn, "unsupported archive policy")
+				continue
+			}
+			raw, e := base64.RawURLEncoding.DecodeString(fields[4])
+			if e != nil {
+				s.sendError(conn, "invalid archive destination")
+				continue
+			}
+			dest := string(raw)
+			if dest == "." {
+				dest = ""
+			} else {
+				if err := gosyncarchive.ValidatePath(dest); err != nil {
+					s.sendError(conn, "unsafe archive destination")
+					continue
+				}
+			}
+			full := filepath.Join(s.baseDir, filepath.FromSlash(dest))
+			baseAbs, _ := filepath.Abs(s.baseDir)
+			fullAbs, _ := filepath.Abs(full)
+			rel, e := filepath.Rel(baseAbs, fullAbs)
+			if e != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				s.sendError(conn, "unsafe archive destination")
+				continue
+			}
+			s.sendResponse(conn, fmt.Sprintf("ARCHIVE-BEGIN %032x %d", time.Now().UnixNano(), gosyncarchive.MaxFrame))
+			res, e := gosyncarchive.Receive(context.Background(), reader, fullAbs, gosyncarchive.Options{Policy: policy, BufferSize: s.bufferSize})
+			if e != nil {
+				s.sendError(conn, "archive receive failed: "+e.Error())
+				continue
+			}
+			s.sendResponse(conn, fmt.Sprintf("ARCHIVE-END %d %d %d", res.Entries, res.Bytes, len(res.Warnings)))
 
 		case ranged.CmdFanout:
 			// Fan-out is a separate command because clients compare the CAPS

@@ -48,6 +48,8 @@ gosync --config /path/to/config.json source destination
 | `progress` | bool | true | Show transfer progress; suppressed by `--quiet` or `--dry-run` |
 | `verbose` | bool | false | Enable verbose logging |
 | `dry_run` | bool | false | Show what would be transferred without transferring |
+| `directory-mode` | string | "files" | `files` retains the compatible per-file path; `archive` opts into one experimental bounded stream |
+| `archive-policy` | string | "portable" | Archive metadata behavior: `strict`, `portable`, or `best-effort` |
 
 ### Filter Options
 
@@ -78,6 +80,33 @@ All configuration options can be set via command-line flags:
 ```bash
 gosync --workers 8 --transport quic --checksum --progress source destination
 ```
+
+### Streaming archive directories
+
+`--directory-mode=archive` is opt-in and applies only when the source is a
+directory. It is supported by TCP, server, QUIC, and their deployment paths;
+standalone SSH is rejected. The receiver negotiates `ARCHIVE-CAPS 1` before any
+entry is sent, and an old or malformed peer causes a hard failure—there is no
+silent fallback. Single-file and per-file directory protocols remain the default.
+
+```sh
+gosync serve --transport tcp --listen :9444 --base /srv/receive
+gosync --transport tcp --directory-mode=archive --archive-policy=portable \
+  /local/tree/ host:9444:/backup/tree/
+```
+
+The stream uses bounded frames and transport backpressure. It includes empty
+directories and zero-length files, stages regular files beside their destination,
+checks every file and the whole archive, then renames each completed file. Paths,
+link targets, existing symlink parents, unsupported entry types, frame limits,
+sequence, CRC, totals, and hashes are validated. Version 1 does not resume within
+an archive; retry the whole directory after failure.
+
+`portable` skips symbolic links with a warning and preserves content, tree,
+mtime, and safe modes. `best-effort` and `strict` create only validated relative
+symbolic links; special files remain rejected. TCP is not encrypted or mutually
+authenticated, so use QUIC with verified PKI or a trusted certificate pin on
+untrusted networks.
 
 ### Transport selection and deployment
 

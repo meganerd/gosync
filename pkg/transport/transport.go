@@ -2,9 +2,23 @@
 package transport
 
 import (
+	"context"
 	"io"
 	"os"
 )
+
+type ArchiveOptions struct {
+	Policy     string
+	BufferSize int
+}
+type ArchiveResult struct {
+	Entries  uint64
+	Bytes    uint64
+	Warnings []string
+}
+type ArchiveSender interface {
+	SendDirectory(context.Context, string, string, ArchiveOptions) (ArchiveResult, error)
+}
 
 // Transport is the interface that all transport backends must implement.
 type Transport interface {

@@ -11,12 +11,69 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	gosyncarchive "github.com/gbjohnso/gosync/pkg/archive"
 	"github.com/gbjohnso/gosync/pkg/checksum"
 	"github.com/quic-go/quic-go"
 )
+
+func (q *QUICTransport) SendDirectory(ctx context.Context, localRoot, remoteRoot string, opts ArchiveOptions) (out ArchiveResult, err error) {
+	q.mu.Lock()
+	conn := q.conn
+	q.mu.Unlock()
+	if conn == nil {
+		return out, fmt.Errorf("not connected")
+	}
+	capCtx, cancel := context.WithTimeout(ctx, q.timeout())
+	defer cancel()
+	capStream, e := conn.OpenStreamSync(capCtx)
+	if e != nil {
+		return out, e
+	}
+	if _, e = io.WriteString(capStream, "ARCHIVE-CAPS 1\n"); e == nil {
+		e = capStream.Close()
+	}
+	if e != nil {
+		return out, e
+	}
+	line, e := readProtocolLine(bufio.NewReader(capStream))
+	capStream.CancelRead(0)
+	if e != nil || !strings.HasPrefix(line, "OK ARCHIVE-CAPS 1 ") {
+		return out, fmt.Errorf("receiver does not support archive streaming: %q: %w", line, e)
+	}
+	stream, _, e := q.operation()
+	if e != nil {
+		return out, e
+	}
+	defer func() { finishQUICStream(stream.Stream, err) }()
+	policy := gosyncarchive.Policy(opts.Policy)
+	if policy == "" {
+		policy = gosyncarchive.PolicyPortable
+	}
+	if _, err = fmt.Fprintf(stream, "ARCHIVE-BEGIN 1 %s sha256 %s\n", policy, base64.RawURLEncoding.EncodeToString([]byte(remoteRoot))); err != nil {
+		return out, err
+	}
+	reader := bufio.NewReader(stream)
+	line, err = readProtocolLine(reader)
+	if err != nil || !strings.HasPrefix(line, "OK ARCHIVE-BEGIN ") {
+		return out, fmt.Errorf("archive begin rejected: %q: %w", line, err)
+	}
+	res, err := gosyncarchive.Send(ctx, stream, localRoot, gosyncarchive.Options{Policy: policy, BufferSize: opts.BufferSize})
+	if err != nil {
+		return out, err
+	}
+	if err = stream.Close(); err != nil {
+		return out, err
+	}
+	line, err = readProtocolLine(reader)
+	if err != nil || !strings.HasPrefix(line, "OK ARCHIVE-END ") {
+		return out, fmt.Errorf("archive rejected: %q: %w", line, err)
+	}
+	return ArchiveResult{Entries: res.Entries, Bytes: res.Bytes, Warnings: res.Warnings}, nil
+}
 
 // QUICTransport multiplexes independent receiver operations over one UDP connection.
 // The mutex protects connection state only; transfers never hold it during I/O.

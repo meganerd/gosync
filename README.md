@@ -90,9 +90,21 @@ gosync source.txt destination.txt
 
 # Transfer a directory
 gosync /path/to/source /path/to/destination
+
+# Experimental bounded archive stream (TCP/server/QUIC only)
+gosync --directory-mode=archive --archive-policy=portable /path/to/source host:9444:/destination
 ```
 
 ### Options
+
+Directory transfers retain the existing per-file worker path by default. The
+explicit `--directory-mode=archive` option sends one bounded stream, preserving
+empty directories and verifying CRC32C frames, per-file SHA-256, and a complete
+archive SHA-256 before success. It negotiates `ARCHIVE-CAPS` and fails against an
+older receiver without falling back. Policies are `portable` (default, safe
+cross-platform subset), `strict`, and `best-effort`. Archive mode rejects SSH,
+unsafe paths, and special files; interrupted regular files are cleaned up from
+staging rather than exposed at their final path.
 
 ```bash
 # Parallel workers

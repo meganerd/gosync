@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,18 +26,21 @@ type Sync struct {
 }
 
 type Config struct {
-	Workers     int
-	Connections int // QUIC data connections (sender sockets) per file; 0 leaves the transport's own setting
-	Bandwidth   int64
-	Compression bool
-	DryRun      bool
-	Verbose     bool
-	Quiet       bool
-	Progress    bool
-	Resume      bool
-	Checksum    bool
-	Excludes    []string
-	Includes    []string
+	Workers       int
+	Connections   int // QUIC data connections (sender sockets) per file; 0 leaves the transport's own setting
+	Bandwidth     int64
+	Compression   bool
+	DryRun        bool
+	Verbose       bool
+	Quiet         bool
+	Progress      bool
+	Resume        bool
+	Checksum      bool
+	Excludes      []string
+	Includes      []string
+	DirectoryMode string
+	ArchivePolicy string
+	BufferSize    int
 }
 
 func NewSync(source, destination string, transport transport.Transport, config Config) *Sync {
@@ -63,6 +67,9 @@ func (s *Sync) Run() error {
 
 	if !s.config.Quiet {
 		fmt.Printf("Starting gosync: %s -> %s\n", s.source, s.destination)
+	}
+	if s.config.DirectoryMode == "archive" {
+		return s.runArchive(start)
 	}
 
 	s.scanner = scanner.NewScanner(
@@ -173,6 +180,57 @@ func (s *Sync) Run() error {
 		return fmt.Errorf("%d file transfers failed", stats.FailedFiles)
 	}
 	return nil
+}
+
+func (s *Sync) runArchive(start time.Time) error {
+	info, err := os.Stat(s.source)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("-directory-mode=archive requires a directory source")
+	}
+	root := s.archiveRemoteRoot()
+	if s.config.DryRun {
+		if !s.config.Quiet {
+			fmt.Printf("[DRY RUN] Would stream archive: %s -> %s\n", s.source, root)
+		}
+		return nil
+	}
+	sender, ok := s.transport.(transport.ArchiveSender)
+	if !ok {
+		return fmt.Errorf("transport %s does not support archive streaming", s.transport.Name())
+	}
+	if err = s.transport.Connect(extractHost(s.destination), extractPort(s.destination)); err != nil {
+		return fmt.Errorf("connect failed: %w", err)
+	}
+	defer s.transport.Close()
+	res, err := sender.SendDirectory(context.Background(), s.source, root, transport.ArchiveOptions{Policy: s.config.ArchivePolicy, BufferSize: s.config.BufferSize})
+	if err != nil {
+		return fmt.Errorf("archive transfer failed: %w", err)
+	}
+	if !s.config.Quiet {
+		elapsed := time.Since(start)
+		fmt.Printf("\nArchive transfer complete:\n  Entries: %d\n  Size: %s\n  Warnings: %d\n  Time: %s\n", res.Entries, formatSize(int64(res.Bytes)), len(res.Warnings), elapsed.Round(time.Millisecond))
+	}
+	return nil
+}
+
+func (s *Sync) archiveRemoteRoot() string {
+	base := s.destination
+	if i := strings.LastIndex(base, ":"); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.TrimRight(base, "/\\")
+	// Receiver destinations are always relative to its configured base root.
+	base = strings.TrimLeft(filepath.ToSlash(base), "/")
+	if base == "" {
+		base = "."
+	}
+	if s.createTargetDir {
+		return filepath.ToSlash(filepath.Join(base, filepath.Base(filepath.Clean(s.source))))
+	}
+	return filepath.ToSlash(base)
 }
 
 func (s *Sync) processResults(display *transferProgress) {

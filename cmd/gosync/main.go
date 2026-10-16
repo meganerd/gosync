@@ -50,6 +50,8 @@ func main() {
 		deployListen  = flag.String("deploy-listen", "0.0.0.0:0", "Listen address for remote server (port 0 = auto-select)")
 		excludes      = flag.String("exclude", "", "Exclude patterns (comma-separated)")
 		includes      = flag.String("include", "", "Include patterns (comma-separated)")
+		directoryMode = flag.String("directory-mode", "files", "Directory transfer mode: files (default) or archive (experimental streaming)")
+		archivePolicy = flag.String("archive-policy", "portable", "Archive metadata policy: strict, portable, or best-effort")
 	)
 
 	flag.BoolVar(progress, "P", true, "Alias for -progress only; does not enable partial retention or resume")
@@ -102,6 +104,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error: -checksum applies only to QUIC/TCP/server transfers; SSH transport does not support application SHA-256 verification")
 		os.Exit(1)
 	}
+	if *directoryMode != "files" && *directoryMode != "archive" {
+		fmt.Fprintln(os.Stderr, "Error: -directory-mode must be files or archive")
+		os.Exit(1)
+	}
+	if *archivePolicy != "strict" && *archivePolicy != "portable" && *archivePolicy != "best-effort" {
+		fmt.Fprintln(os.Stderr, "Error: -archive-policy must be strict, portable, or best-effort")
+		os.Exit(1)
+	}
+	if *directoryMode == "archive" && *transportType == "ssh" {
+		fmt.Fprintln(os.Stderr, "Error: archive streaming requires quic, tcp, or server transport")
+		os.Exit(1)
+	}
 
 	if *connections < 1 || *connections > ranged.MaxConnections {
 		fmt.Fprintf(os.Stderr, "Error: -connections must be between 1 and %d\n", ranged.MaxConnections)
@@ -127,7 +141,7 @@ func main() {
 	destination := flag.Arg(1)
 
 	if *deployFlag {
-		runDeploy(source, destination, *deployKey, *deployListen, *transportType, *workers, *bandwidth, *bufferSize, *connections, *compression, *dryRun, *verbose, *quiet, *progress, *resume, *checksum, tlsOptions, certificatePEM)
+		runDeploy(source, destination, *deployKey, *deployListen, *transportType, *workers, *bandwidth, *bufferSize, *connections, *compression, *dryRun, *verbose, *quiet, *progress, *resume, *checksum, *directoryMode, *archivePolicy, tlsOptions, certificatePEM)
 		return
 	}
 
@@ -167,18 +181,21 @@ func main() {
 	}
 
 	syncConfig := sync.Config{
-		Workers:     *workers,
-		Connections: *connections,
-		Bandwidth:   *bandwidth,
-		Compression: *compression,
-		DryRun:      *dryRun,
-		Verbose:     *verbose,
-		Quiet:       *quiet,
-		Progress:    *progress,
-		Resume:      *resume,
-		Checksum:    *checksum,
-		Excludes:    excludeList,
-		Includes:    includeList,
+		Workers:       *workers,
+		Connections:   *connections,
+		Bandwidth:     *bandwidth,
+		Compression:   *compression,
+		DryRun:        *dryRun,
+		Verbose:       *verbose,
+		Quiet:         *quiet,
+		Progress:      *progress,
+		Resume:        *resume,
+		Checksum:      *checksum,
+		Excludes:      excludeList,
+		Includes:      includeList,
+		DirectoryMode: *directoryMode,
+		ArchivePolicy: *archivePolicy,
+		BufferSize:    *bufferSize,
 	}
 
 	s := sync.NewSync(source, destination, transportImpl, syncConfig)
@@ -234,7 +251,7 @@ func reportFileTransferTransport(out io.Writer, selected string, deployment, dry
 	}
 }
 
-func runDeploy(source, destination, keyFile, listenAddr, transportType string, workers int, bandwidth int64, bufferSize, connections int, compression, dryRun, verbose, quiet, progress, resume, checksum bool, tlsOptions transferTLSOptions, certificatePEM []byte) {
+func runDeploy(source, destination, keyFile, listenAddr, transportType string, workers int, bandwidth int64, bufferSize, connections int, compression, dryRun, verbose, quiet, progress, resume, checksum bool, directoryMode, archivePolicy string, tlsOptions transferTLSOptions, certificatePEM []byte) {
 	reportFileTransferTransport(os.Stdout, transportType, true, dryRun, quiet)
 	d := deploy.NewDeployer(source, destination, keyFile)
 	if err := d.SetTransport(transportType); err != nil {
@@ -299,18 +316,21 @@ func runDeploy(source, destination, keyFile, listenAddr, transportType string, w
 
 	var excludeList, includeList []string
 	syncConfig := sync.Config{
-		Workers:     workers,
-		Connections: connections,
-		Bandwidth:   bandwidth,
-		Compression: compression,
-		DryRun:      dryRun,
-		Verbose:     verbose,
-		Quiet:       quiet,
-		Progress:    progress,
-		Resume:      resume,
-		Checksum:    checksum,
-		Excludes:    excludeList,
-		Includes:    includeList,
+		Workers:       workers,
+		Connections:   connections,
+		Bandwidth:     bandwidth,
+		Compression:   compression,
+		DryRun:        dryRun,
+		Verbose:       verbose,
+		Quiet:         quiet,
+		Progress:      progress,
+		Resume:        resume,
+		Checksum:      checksum,
+		Excludes:      excludeList,
+		Includes:      includeList,
+		DirectoryMode: directoryMode,
+		ArchivePolicy: archivePolicy,
+		BufferSize:    bufferSize,
 	}
 
 	deployDest := fmt.Sprintf("%s@%s:%d", d.GetUsername(), d.GetHost(), serverPort)

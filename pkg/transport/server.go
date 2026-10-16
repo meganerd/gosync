@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -14,6 +15,12 @@ import (
 
 	"github.com/gbjohnso/gosync/pkg/checksum"
 )
+
+func (t *ServerTransport) SendDirectory(ctx context.Context, localRoot, remoteRoot string, opts ArchiveOptions) (ArchiveResult, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return sendDirectory(ctx, t.conn, t.reader, localRoot, remoteRoot, opts)
+}
 
 type ServerTransport struct {
 	progressCallback func(int64)
