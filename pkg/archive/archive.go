@@ -343,10 +343,7 @@ func Receive(ctx context.Context, r io.Reader, root string, opts Options) (res R
 				return res, fmt.Errorf("non-monotonic archive entry id")
 			}
 			lastID = en.ID
-			key := en.Path
-			if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-				key = strings.ToLower(key)
-			}
+			key := collisionKey(en.Path, runtime.GOOS)
 			if _, exists := seen[key]; exists {
 				return res, fmt.Errorf("archive name collision %q", en.Path)
 			}
@@ -474,6 +471,12 @@ func Receive(ctx context.Context, r io.Reader, root string, opts Options) (res R
 }
 
 func ValidatePath(p string) error {
+	return validatePathForOS(p, runtime.GOOS)
+}
+
+// validatePathForOS keeps destination-name rules testable on every build host.
+// The receiver still calls ValidatePath with its actual operating system.
+func validatePathForOS(p, goos string) error {
 	if p == "" || len(p) > MaxPath || strings.HasPrefix(p, "/") || strings.Contains(p, "\\") || strings.ContainsRune(p, 0) {
 		return fmt.Errorf("unsafe archive path %q", p)
 	}
@@ -494,16 +497,24 @@ func ValidatePath(p string) error {
 	if (len(first) >= 2 && first[1] == ':') || strings.HasPrefix(p, "//") {
 		return fmt.Errorf("unsafe archive path %q", p)
 	}
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		for _, c := range strings.Split(p, "/") {
 			trimmed := strings.TrimRight(c, ". ")
 			base := strings.ToUpper(strings.Split(trimmed, ".")[0])
-			if trimmed != c || base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT") {
+			reservedPort := len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9'
+			if trimmed != c || base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" || reservedPort {
 				return fmt.Errorf("unsafe archive path %q", p)
 			}
 		}
 	}
 	return nil
+}
+
+func collisionKey(path, goos string) string {
+	if goos == "windows" || goos == "darwin" {
+		return strings.ToLower(path)
+	}
+	return path
 }
 func ValidateLink(path, target string) error {
 	if target == "" || filepath.IsAbs(target) || filepath.VolumeName(target) != "" || strings.ContainsRune(target, 0) || strings.Contains(target, "\\") {

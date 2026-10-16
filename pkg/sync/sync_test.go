@@ -1,14 +1,18 @@
 package sync
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gbjohnso/gosync/pkg/transport"
 )
 
 type fakeTransport struct {
@@ -19,6 +23,38 @@ type fakeTransport struct {
 	sent        []struct{ local, remote string }
 	connectErr  error
 	sendErr     map[string]error
+}
+
+type archiveWarningTransport struct{ fakeTransport }
+
+func (a *archiveWarningTransport) SendDirectory(context.Context, string, string, transport.ArchiveOptions) (transport.ArchiveResult, error) {
+	return transport.ArchiveResult{Entries: 1, Warnings: []string{"skipped symlink: link"}}, nil
+}
+
+func TestArchiveWarningsAreVisibleAndExact(t *testing.T) {
+	output, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	original := os.Stderr
+	os.Stderr = output
+	defer func() { os.Stderr = original }()
+
+	s := NewSync(t.TempDir(), "host:9444:/dest", &archiveWarningTransport{}, Config{DirectoryMode: "archive"})
+	if err := s.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := output.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "Archive warning: skipped symlink: link\n") {
+		t.Fatalf("stderr=%q", got)
+	}
 }
 
 func (f *fakeTransport) Name() string { return "fake" }

@@ -18,3 +18,10 @@ per-file path unless the option is supplied.
 Archive protocol version 1 intentionally has no mid-stream resume. Operators
 should retry the complete archive after interruption. TCP/server traffic remains
 unencrypted; QUIC retains its existing TLS verification requirements.
+
+The cross-platform conformance suite now covers portable path syntax, Windows
+reserved names, case-collision keys, Unicode filenames, symlinks, permission and
+timestamp round trips, atomic replacement, unsafe destination parents, corrupt
+or interrupted streams, and Linux special-file rejection. See
+[archive-stream compatibility and operations](archive-stream-compatibility.md)
+for the exact policy outcomes, metadata-loss expectations, and secure examples.

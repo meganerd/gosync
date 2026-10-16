@@ -212,6 +212,9 @@ func (s *Sync) runArchive(start time.Time) error {
 	if !s.config.Quiet {
 		elapsed := time.Since(start)
 		fmt.Printf("\nArchive transfer complete:\n  Entries: %d\n  Size: %s\n  Warnings: %d\n  Time: %s\n", res.Entries, formatSize(int64(res.Bytes)), len(res.Warnings), elapsed.Round(time.Millisecond))
+		for _, warning := range res.Warnings {
+			fmt.Fprintf(os.Stderr, "Archive warning: %s\n", warning)
+		}
 	}
 	return nil
 }

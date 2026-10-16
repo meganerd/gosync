@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRoundTripNestedTree(t *testing.T) {
@@ -69,10 +70,115 @@ func TestSymlinkPoliciesAndEscape(t *testing.T) {
 }
 
 func TestRejectsUnsafePaths(t *testing.T) {
-	for _, p := range []string{"../x", "/x", "a//b", "a\\b", "a/./b", string([]byte{'a', 0, 'b'})} {
+	for _, p := range []string{"../x", "/x", "a//b", "a\\b", "a/./b", "C:/x", "//server/share", string([]byte{'a', 0, 'b'})} {
 		if ValidatePath(p) == nil {
 			t.Errorf("accepted %q", p)
 		}
+	}
+}
+
+func TestWindowsPathConformance(t *testing.T) {
+	rejected := []string{"CON", "con.txt", "dir/PRN", "AUX.log", "nul", "COM1", "com9.txt", "LPT1", "name.", "name "}
+	for _, p := range rejected {
+		if err := validatePathForOS(p, "windows"); err == nil {
+			t.Errorf("Windows accepted reserved path %q", p)
+		}
+	}
+	for _, p := range []string{"console", "COM0", "COM10", "LPT0", "LPT10", "café/文件.txt"} {
+		if err := validatePathForOS(p, "windows"); err != nil {
+			t.Errorf("Windows rejected valid path %q: %v", p, err)
+		}
+	}
+}
+
+func TestPlatformCaseCollisionKeys(t *testing.T) {
+	if collisionKey("Readme", "windows") != collisionKey("README", "windows") {
+		t.Fatal("Windows case collision was not detected")
+	}
+	if collisionKey("Readme", "darwin") != collisionKey("README", "darwin") {
+		t.Fatal("macOS case collision was not detected")
+	}
+	if collisionKey("Readme", "linux") == collisionKey("README", "linux") {
+		t.Fatal("Linux case-distinct names were collapsed")
+	}
+}
+
+func TestUnicodeNamesAndMetadataRoundTrip(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	name := filepath.Join("café", "文件-U0001f642.txt")
+	mustWrite(t, filepath.Join(src, name), []byte("unicode"))
+	wantTime := time.Unix(1_700_000_000, 123_000_000)
+	if err := os.Chtimes(filepath.Join(src, name), wantTime, wantTime); err != nil {
+		t.Fatal(err)
+	}
+	var wire bytes.Buffer
+	if _, err := Send(context.Background(), &wire, src, Options{Policy: PolicyPortable}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Receive(context.Background(), &wire, dst, Options{Policy: PolicyPortable}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, name))
+	if err != nil || string(got) != "unicode" {
+		t.Fatalf("Unicode file: %q, %v", got, err)
+	}
+	fi, err := os.Stat(filepath.Join(dst, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.ModTime().UnixNano() != wantTime.UnixNano() {
+		t.Fatalf("mtime=%v, want %v", fi.ModTime(), wantTime)
+	}
+}
+
+func TestPortableWarningIsDeterministic(t *testing.T) {
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "target"), []byte("ok"))
+	if err := os.Symlink("target", filepath.Join(src, "link")); err != nil {
+		t.Skip(err)
+	}
+	var wire bytes.Buffer
+	res, err := Send(context.Background(), &wire, src, Options{Policy: PolicyPortable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"skipped symlink: link"}
+	if len(res.Warnings) != 1 || res.Warnings[0] != want[0] {
+		t.Fatalf("warnings=%q, want %q", res.Warnings, want)
+	}
+}
+
+func TestRegularFileReplacementIsAtomicAndSymlinkParentRefused(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	mustWrite(t, filepath.Join(src, "file"), []byte("new"))
+	mustWrite(t, filepath.Join(dst, "file"), []byte("old"))
+	var wire bytes.Buffer
+	if _, err := Send(context.Background(), &wire, src, Options{Policy: PolicyStrict}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Receive(context.Background(), &wire, dst, Options{Policy: PolicyStrict}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dst, "file")); string(got) != "new" {
+		t.Fatalf("replacement content=%q", got)
+	}
+
+	outside := t.TempDir()
+	dst = t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dst, "nested")); err != nil {
+		t.Skip(err)
+	}
+	src = t.TempDir()
+	mustWrite(t, filepath.Join(src, "nested", "file"), []byte("escape"))
+	wire.Reset()
+	if _, err := Send(context.Background(), &wire, src, Options{Policy: PolicyStrict}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Receive(context.Background(), &wire, dst, Options{Policy: PolicyStrict}); err == nil {
+		t.Fatal("accepted symlink destination parent")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "file")); !os.IsNotExist(err) {
+		t.Fatalf("wrote outside extraction root: %v", err)
 	}
 }
 
