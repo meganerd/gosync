@@ -147,7 +147,9 @@ func TestDeploymentSSHHelper(t *testing.T) {
 			os.Exit(1)
 		}
 		os.Exit(0)
-	case strings.HasPrefix(command, "nohup"):
+	// The receiver start command is assembled from guarded shell fragments, so
+	// match the nohup invocation instead of assuming it leads the command.
+	case strings.Contains(command, "nohup ~/gosync serve"):
 		if mode == "start-failure" {
 			os.Exit(1)
 		}

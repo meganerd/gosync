@@ -222,6 +222,13 @@ silent TCP override. SSH handles setup and certificate retrieval; actual QUIC fi
 data travels directly over UDP, authenticated with the retrieved TLS leaf pin,
 not through an SSH tunnel.
 
+The deployed receiver writes its startup output to `~/.gosync-server.log` on the
+remote host, beside the `~/.gosync.pid` marker that records which process the
+deployment owns. The deployer verifies that log is writable before starting the
+receiver, and if the receiver exits during startup the deployment stops there and
+echoes the log instead of failing later during certificate retrieval. Read that
+file on the remote host for the receiver's own view of a failed startup.
+
 On Linux, a block device can be used as a single-file source. gosync reads its
 capacity with `BLKGETSIZE64`; the invoking user must have permission to open the
 device. In deployment mode the destination remains a receiver directory, so

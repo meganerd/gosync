@@ -252,6 +252,29 @@ func (d *Deployer) startRemoteServer() error {
 	return runCommand("ssh", args, os.Stdout, os.Stderr)
 }
 
+// The receiver log lives beside the pid marker in the deployment user's own
+// home. The previous shared path /tmp/gosync-server.log could already exist,
+// owned by another user, another service, or an earlier deployment, and the
+// remote shell then failed the log redirect. That failure happened inside a
+// background job, so the remote command still exited 0 and the deployment only
+// failed later as "fetch remote certificate failed: ssh: exit status 1".
+const remoteLogFileAssignment = `log="$HOME/.gosync-server.log"`
+
+// remoteLogFileCheck fails the deployment at the point of failure instead of
+// leaving an unusable log path to surface as an unrelated certificate error.
+// The shell's own reason is captured because a failed redirect is reported
+// before a trailing 2>/dev/null would take effect.
+const remoteLogFileCheck = `if ! logerror=$(: > "$log" 2>&1); then echo "gosync: remote log $log is not writable: $logerror" >&2; exit 1; fi`
+
+// remoteStartupCheck fails the deployment when the receiver exits immediately,
+// and echoes the receiver log so the actual reason reaches the operator. A
+// background job that could not exec its command survives as a zombie, so both
+// a missing process and a zombie are treated as startup failure.
+const remoteStartupFailure = `echo "gosync: remote receiver failed to start; receiver log follows:" >&2; tail -n 40 -- "$log" >&2; exit 1`
+
+const remoteStartupCheck = `if ! kill -0 "$pid" 2>/dev/null; then ` + remoteStartupFailure + `; fi; ` +
+	`case "$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)" in Z|X) ` + remoteStartupFailure + ` ;; esac`
+
 func (d *Deployer) remoteServerCommand() string {
 	tlsArgs := ""
 	if d.transportType == "quic" {
@@ -269,10 +292,13 @@ func (d *Deployer) remoteServerCommand() string {
 			tlsArgs += " --cert " + quoteRemotePath(d.remoteCert) + " --key " + quoteRemotePath(d.remoteKey)
 		}
 	}
-	return fmt.Sprintf(
-		"nohup ~/gosync serve --listen 0.0.0.0:%d --base %s --buffer-size %d --transport %s%s > /tmp/gosync-server.log 2>&1 </dev/null & sleep 2; pid=$!; start=$(awk '{print $22}' /proc/$pid/stat 2>/dev/null); echo \"$pid $start\" > \"$HOME/.gosync.pid\"",
-		d.serverPort, quoteRemotePath(d.baseDir), d.bufferSize, d.transportType, tlsArgs,
-	)
+	return strings.Join([]string{
+		remoteLogFileAssignment, remoteLogFileCheck,
+		fmt.Sprintf(
+			`nohup ~/gosync serve --listen 0.0.0.0:%d --base %s --buffer-size %d --transport %s%s > "$log" 2>&1 </dev/null & pid=$!; sleep 2; %s; start=$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null); echo "$pid $start" > "$HOME/.gosync.pid"`,
+			d.serverPort, quoteRemotePath(d.baseDir), d.bufferSize, d.transportType, tlsArgs, remoteStartupCheck,
+		),
+	}, "; ")
 }
 
 func (d *Deployer) parseDestination() error {
